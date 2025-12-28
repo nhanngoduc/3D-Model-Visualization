@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Medical Data Viewer</title>
+    <link rel="stylesheet" href="css/style.css?v=2">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="app-title">
+                    <span class="icon">🏥</span>
+                    Medical Data Viewer
+                </h1>
+                <div class="header-info" id="headerInfo">
+                    <span class="status-indicator"></span>
+                    <span class="status-text">Ready</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <div class="sidebar-section">
+                    <h2 class="section-title">Patient Selection</h2>
+                    <div class="patient-selector">
+                        <select id="patientSelect" class="custom-select">
+                            <option value="">Select a patient...</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="sidebar-section" id="dataTypeSection" style="display: none;">
+                    <h2 class="section-title">Data Types</h2>
+                    <div class="data-type-tabs" id="dataTypeTabs">
+                        <button class="tab-button" data-type="Face scans">
+                            <span class="tab-icon">👤</span>
+                            Face Scans
+                        </button>
+                        <button class="tab-button" data-type="Intraoral scans">
+                            <span class="tab-icon">🦷</span>
+                            Intraoral
+                        </button>
+                        <button class="tab-button" data-type="Pre-Op CBCT">
+                            <span class="tab-icon">📊</span>
+                            CBCT
+                        </button>
+                    </div>
+                </div>
+
+                <div class="sidebar-section" id="fileListSection" style="display: none;">
+                    <h2 class="section-title">Files</h2>
+                    <div class="file-list" id="fileList">
+                        <!-- Files will be populated here -->
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Viewer Area -->
+            <main class="viewer-area">
+                <div class="viewer-container">
+                    <div class="welcome-screen" id="welcomeScreen">
+                        <div class="welcome-content">
+                            <div class="welcome-icon">🔬</div>
+                            <h2>Welcome to Medical Data Viewer</h2>
+                            <p>Select a patient to begin viewing medical data</p>
+                            <div class="feature-list">
+                                <div class="feature-item">
+                                    <span class="feature-icon">✓</span>
+                                    <span>3D Mesh Visualization (PLY/STL)</span>
+                                </div>
+                                <div class="feature-item">
+                                    <span class="feature-icon">✓</span>
+                                    <span>DICOM Image Viewing</span>
+                                </div>
+                                <div class="feature-item">
+                                    <span class="feature-icon">✓</span>
+                                    <span>Interactive 3D Controls</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3D Viewer Canvas -->
+                    <canvas id="viewer3d" style="display: none;"></canvas>
+
+                    <!-- DICOM Viewer -->
+                    <div id="dicomViewer" style="display: none;">
+                        <canvas id="dicomCanvas"></canvas>
+                        <div class="dicom-controls">
+                            <button id="prevSlice" class="control-btn">← Previous</button>
+                            <span id="sliceInfo">Slice 1 / 1</span>
+                            <button id="nextSlice" class="control-btn">Next →</button>
+                        </div>
+                    </div>
+
+                    <!-- Viewer Controls -->
+                    <div class="viewer-controls" id="viewerControls" style="display: none;">
+                        <button class="control-btn" id="resetCamera" title="Reset Camera">
+                            <span>🔄</span> Reset View
+                        </button>
+                        <button class="control-btn" id="toggleWireframe" title="Toggle Wireframe">
+                            <span>📐</span> Wireframe
+                        </button>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Three.js and Loaders -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/PLYLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <!-- Application Scripts -->
+    <script src="js/app.js?v=2"></script>
+    <script src="js/viewer3d.js?v=2"></script>
+    <script src="js/dicomViewer.js?v=2"></script>
+</body>
+
+</html>

@@ -1,0 +1,5 @@
+# Bỏ qua thư mục venv
+venv/
+
+# Bỏ qua thư mục có khoảng trắng (cần dùng ngoặc kép hoặc dấu gạch chéo ngược)
+"Cases for AI Fernando Polanco/"
