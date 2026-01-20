@@ -94,14 +94,27 @@ class Viewer3D {
             // Compute normals for proper lighting
             geometry.computeVertexNormals();
 
-            // Create material with gradient color
-            const material = new THREE.MeshPhongMaterial({
-                color: 0x667eea,
-                specular: 0x111111,
-                shininess: 200,
-                flatShading: false,
-                side: THREE.DoubleSide
-            });
+            // Check if geometry has color information
+            let material;
+            if (geometry.attributes.color) {
+                // Use vertex colors from the file
+                material = new THREE.MeshPhongMaterial({
+                    vertexColors: true,
+                    specular: 0x111111,
+                    shininess: 200,
+                    flatShading: false,
+                    side: THREE.DoubleSide
+                });
+            } else {
+                // Use a neutral light gray color that preserves original appearance
+                material = new THREE.MeshPhongMaterial({
+                    color: 0xcccccc,
+                    specular: 0x111111,
+                    shininess: 200,
+                    flatShading: false,
+                    side: THREE.DoubleSide
+                });
+            }
 
             // Create mesh
             this.currentMesh = new THREE.Mesh(geometry, material);

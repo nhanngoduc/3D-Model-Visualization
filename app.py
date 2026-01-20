@@ -7,7 +7,7 @@ app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)  # Enable CORS for all routes
 
 # Đường dẫn đến thư mục gốc chứa các thư mục dữ liệu
-ROOT_FOLDER = r"D:\Lab\import data\Cases for AI Fernando Polanco"
+ROOT_FOLDER = r"D:\Lab\3D Model Visualization\Cases for AI Fernando Polanco\Cases for AI Fernando Polanco"
 
 @app.route('/')
 def index():

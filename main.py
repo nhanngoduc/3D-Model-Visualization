@@ -4,8 +4,7 @@ import pymeshlab
 import pydicom
 
 # Đường dẫn đến thư mục gốc chứa các thư mục dữ liệu
-root_folder = r"D:\Lab\import data\Cases for AI Fernando Polanco"
-
+root_folder = r"D:\Lab\3D Model Visualization\Cases for AI Fernando Polanco\Cases for AI Fernando Polanco"
 # Hàm để xử lý tệp .ply với pyMeshLab
 def process_ply_file(input_file, output_file):
     try:
