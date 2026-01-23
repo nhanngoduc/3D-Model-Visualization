@@ -5,8 +5,6 @@
 const API_BASE = 'http://localhost:5000/api';
 
 let registrationViewer = null;
-let sourcePreviewViewer = null;
-let targetPreviewViewer = null;
 let allPatients = [];
 let currentPatientData = {};
 let selectedSource = null;
@@ -116,13 +114,11 @@ function setupEventListeners() {
     // REG-01.4: Validate on selection change
     sourceSelect.addEventListener('change', (e) => {
         selectedSource = e.target.value ? JSON.parse(e.target.value) : null;
-        previewSourceModel();
         validateSelection();
     });
     
     targetSelect.addEventListener('change', (e) => {
         selectedTarget = e.target.value ? JSON.parse(e.target.value) : null;
-        previewTargetModel();
         validateSelection();
     });
     
@@ -168,111 +164,6 @@ function setupEventListeners() {
         if (registrationViewer) {
             registrationViewer.applyPreset(e.target.value);
         }
-    });
-}
-
-// Load and preview Source Model in real-time
-async function previewSourceModel() {
-    const placeholder = document.querySelector('#sourcePreviewContainer .preview-placeholder');
-    
-    if (!selectedSource) {
-        // Show placeholder when no model selected
-        if (sourcePreviewViewer) {
-            sourcePreviewViewer.dispose();
-            sourcePreviewViewer = null;
-        }
-        if (placeholder) {
-            placeholder.classList.add('show');
-        }
-        return;
-    }
-
-    try {
-        console.log('Loading source model:', selectedSource);
-        
-        // Wait for loaders to be available
-        await waitForLoaders();
-        
-        // Initialize source preview viewer if needed
-        if (!sourcePreviewViewer) {
-            sourcePreviewViewer = new PreviewViewer('sourcePreviewCanvas');
-        }
-
-        // Hide placeholder, show canvas
-        if (placeholder) {
-            placeholder.classList.remove('show');
-        }
-
-        // Load model
-        const modelUrl = `${API_BASE}/file/${selectedSource.file_path}`;
-        console.log('Source model URL:', modelUrl);
-        sourcePreviewViewer.loadModel(modelUrl, selectedSource.file_type);
-
-    } catch (error) {
-        console.error('Error previewing source model:', error);
-        alert('Error loading source model: ' + error.message);
-    }
-}
-
-// Load and preview Target Model in real-time
-async function previewTargetModel() {
-    const placeholder = document.querySelector('#targetPreviewContainer .preview-placeholder');
-    
-    if (!selectedTarget) {
-        // Show placeholder when no model selected
-        if (targetPreviewViewer) {
-            targetPreviewViewer.dispose();
-            targetPreviewViewer = null;
-        }
-        if (placeholder) {
-            placeholder.classList.add('show');
-        }
-        return;
-    }
-
-    try {
-        console.log('Loading target model:', selectedTarget);
-        
-        // Wait for loaders to be available
-        await waitForLoaders();
-        
-        // Initialize target preview viewer if needed
-        if (!targetPreviewViewer) {
-            targetPreviewViewer = new PreviewViewer('targetPreviewCanvas');
-        }
-
-        // Hide placeholder, show canvas
-        if (placeholder) {
-            placeholder.classList.remove('show');
-        }
-
-        // Load model
-        const modelUrl = `${API_BASE}/file/${selectedTarget.file_path}`;
-        console.log('Target model URL:', modelUrl);
-        targetPreviewViewer.loadModel(modelUrl, selectedTarget.file_type);
-
-    } catch (error) {
-        console.error('Error previewing target model:', error);
-        alert('Error loading target model: ' + error.message);
-    }
-}
-
-// Wait for Three.js loaders to be available
-function waitForLoaders(maxRetries = 30) {
-    return new Promise((resolve, reject) => {
-        let retries = 0;
-        const checkLoaders = () => {
-            if (typeof PLYLoader !== 'undefined' && typeof STLLoader !== 'undefined' && typeof THREE !== 'undefined') {
-                console.log('Loaders available');
-                resolve();
-            } else if (retries < maxRetries) {
-                retries++;
-                setTimeout(checkLoaders, 100);
-            } else {
-                reject(new Error('Loaders failed to load'));
-            }
-        };
-        checkLoaders();
     });
 }
 
