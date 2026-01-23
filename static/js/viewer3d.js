@@ -94,6 +94,9 @@ class Viewer3D {
             // Compute normals for proper lighting
             geometry.computeVertexNormals();
 
+            // Kiểm tra xem file có thông tin màu vertex (vertex colors)
+            // Nếu có → Sử dụng vertexColors: true để hiển thị màu gốc từ file
+            // Nếu không → Dùng màu xám nhạt 0xcccccc để không thay đổi hình dáng
             // Check if geometry has color information
             let material;
             if (geometry.attributes.color) {

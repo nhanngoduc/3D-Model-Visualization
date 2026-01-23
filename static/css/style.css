@@ -45,6 +45,7 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 2rem;
 }
 
 .app-title {
@@ -57,6 +58,34 @@ body {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    white-space: nowrap;
+}
+
+.header-nav {
+    display: flex;
+    gap: 2rem;
+    flex: 1;
+    justify-content: center;
+}
+
+.nav-link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-weight: 600;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    transition: all 0.3s ease;
+    border-bottom: 2px solid transparent;
+}
+
+.nav-link:hover {
+    color: var(--text-primary);
+    background: rgba(102, 126, 234, 0.1);
+}
+
+.nav-link.active {
+    color: #667eea;
+    border-bottom-color: #667eea;
 }
 
 .icon {
@@ -68,6 +97,7 @@ body {
     align-items: center;
     gap: 0.5rem;
     color: var(--text-secondary);
+    white-space: nowrap;
 }
 
 .status-indicator {

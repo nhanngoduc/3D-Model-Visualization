@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registration - Medical Data Viewer</title>
+    <link rel="stylesheet" href="../css/style.css?v=2">
+    <link rel="stylesheet" href="../css/registration.css?v=1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="app-title">
+                    <span class="icon">🏥</span>
+                    Medical Data Viewer
+                </h1>
+                <div class="header-nav">
+                    <a href="../index.html" class="nav-link">Viewer</a>
+                    <a href="registration.html" class="nav-link active">Registration</a>
+                </div>
+                <div class="header-info" id="headerInfo">
+                    <span class="status-indicator"></span>
+                    <span class="status-text">Registration Mode</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <!-- REG-01: Model Selection Panel -->
+                <div class="sidebar-section">
+                    <h2 class="section-title">Model Selection</h2>
+                    
+                    <!-- Source Model -->
+                    <div class="model-selector">
+                        <label for="sourceModel" class="selector-label">Source Model (Movable)</label>
+                        <select id="sourceModel" class="custom-select">
+                            <option value="">-- Select Source Model --</option>
+                        </select>
+                        <small class="selector-hint">Will be aligned to target</small>
+                    </div>
+
+                    <!-- Swap Button -->
+                    <button id="swapModelsBtn" class="btn btn-secondary btn-icon" title="Swap Source and Target">
+                        <span class="btn-icon-symbol">⇄</span>
+                        Swap Models
+                    </button>
+
+                    <!-- Target Model -->
+                    <div class="model-selector">
+                        <label for="targetModel" class="selector-label">Target Model (Fixed)</label>
+                        <select id="targetModel" class="custom-select">
+                            <option value="">-- Select Target Model --</option>
+                        </select>
+                        <small class="selector-hint">Reference (will not move)</small>
+                    </div>
+
+                    <!-- Direction Indicator -->
+                    <div class="direction-indicator" id="directionIndicator" style="display: none;">
+                        <span class="direction-arrow">Source</span>
+                        <span class="direction-arrow-symbol">→</span>
+                        <span class="direction-arrow">Target</span>
+                    </div>
+
+                    <!-- Validation Message -->
+                    <div id="validationMessage" class="validation-message" style="display: none;"></div>
+
+                    <!-- Next Button -->
+                    <button id="proceedBtn" class="btn btn-primary" disabled>
+                        Proceed to Overlay Viewer →
+                    </button>
+                </div>
+
+                <!-- REG-02: Viewer Controls Panel -->
+                <div id="viewerControlsPanel" class="sidebar-section" style="display: none;">
+                    <h2 class="section-title">Viewer Controls</h2>
+
+                    <!-- Visibility Toggles -->
+                    <div class="control-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="toggleSource" checked>
+                            <span>Show Source</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="toggleTarget" checked>
+                            <span>Show Target</span>
+                        </label>
+                    </div>
+
+                    <!-- Opacity Sliders -->
+                    <div class="control-group">
+                        <div class="slider-group">
+                            <label for="sourceOpacity">Source Opacity</label>
+                            <div class="slider-container">
+                                <input type="range" id="sourceOpacity" min="0" max="100" value="100" class="slider">
+                                <span id="sourceOpacityValue" class="slider-value">100%</span>
+                            </div>
+                        </div>
+
+                        <div class="slider-group">
+                            <label for="targetOpacity">Target Opacity</label>
+                            <div class="slider-container">
+                                <input type="range" id="targetOpacity" min="0" max="100" value="100" class="slider">
+                                <span id="targetOpacityValue" class="slider-value">100%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Camera Presets -->
+                    <div class="control-group">
+                        <label for="cameraPreset">Camera Preset</label>
+                        <select id="cameraPreset" class="custom-select">
+                            <option value="isometric">Isometric</option>
+                            <option value="front">Front View</option>
+                            <option value="top">Top View</option>
+                            <option value="left">Left View</option>
+                            <option value="fitAll">Fit All</option>
+                        </select>
+                    </div>
+
+                    <!-- Next Step -->
+                    <button id="continueRegBtn" class="btn btn-primary">
+                        Continue to Registration →
+                    </button>
+                </div>
+            </aside>
+
+            <!-- Main Viewer Area -->
+            <main class="viewer-area">
+                <!-- Model Selection & Preview View -->
+                <div id="selectionView" class="selection-view">
+                    <div class="selection-content">
+                        <div class="selection-icon">📋</div>
+                        <h2>Select and Preview Models</h2>
+                        <p>Choose Source (movable) and Target (fixed) models from the sidebar - they will preview below</p>
+                        
+                        <!-- Preview Containers for Source and Target -->
+                        <div class="preview-grid">
+                            <!-- Source Model Preview -->
+                            <div class="preview-panel">
+                                <h3 class="preview-title">🔵 Source Model</h3>
+                                <div id="sourcePreviewContainer" class="preview-container">
+                                    <canvas id="sourcePreviewCanvas"></canvas>
+                                    <div class="preview-placeholder">
+                                        <div class="placeholder-icon">🔵</div>
+                                        <p>Select a Source model to preview</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Target Model Preview -->
+                            <div class="preview-panel">
+                                <h3 class="preview-title">⚫ Target Model</h3>
+                                <div id="targetPreviewContainer" class="preview-container">
+                                    <canvas id="targetPreviewCanvas"></canvas>
+                                    <div class="preview-placeholder">
+                                        <div class="placeholder-icon">⚫</div>
+                                        <p>Select a Target model to preview</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3D Overlay Viewer Container (Full Registration) -->
+                <div id="viewerContainer" class="viewer-container" style="display: none; width: 100%; height: 100%; position: relative;">
+                    <canvas id="registrationViewer" style="display: block; width: 100%; height: 100%;"></canvas>
+                </div>
+
+                <!-- Loading Indicator -->
+                <div id="loadingIndicator" class="loading-indicator" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Loading models...</p>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="../js/PLYLoader.js"></script>
+    <script src="../js/STLLoader.js"></script>
+    <script src="../js/OrbitControls.js"></script>
+    
+    <script src="../js/registration-viewer.js?v=4"></script>
+    <script src="../js/registration.js?v=4"></script>
+</body>
+
+</html>

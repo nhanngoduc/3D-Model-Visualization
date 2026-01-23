@@ -100,7 +100,49 @@ def get_file(filepath):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/cbct-series/<patient_id>', methods=['GET'])
+def get_cbct_series(patient_id):
+    """REG-01.5: Get CBCT series grouped by Series Instance UID"""
+    try:
+        patient_path = os.path.join(ROOT_FOLDER, patient_id)
+        
+        if not os.path.exists(patient_path):
+            return jsonify({"error": "Patient not found"}), 404
+        
+        cbct_folder = os.path.join(patient_path, "Pre-Op CBCT")
+        
+        if not os.path.exists(cbct_folder):
+            return jsonify({"series": []})
+        
+        # Group DICOM files by series
+        series_map = {}
+        dcm_files = []
+        
+        # Find all DICOM files
+        for root, dirs, files in os.walk(cbct_folder):
+            for file in files:
+                if file.lower().endswith('.dcm'):
+                    file_path = os.path.join(root, file)
+                    dcm_files.append({
+                        'name': file,
+                        'path': os.path.relpath(file_path, ROOT_FOLDER)
+                    })
+        
+        # For now, group all DICOM files as a single series
+        # In production, parse Series Instance UID from DICOM headers
+        if dcm_files:
+            series_map['default_series'] = {
+                "series_id": "default_series",
+                "series_name": "CBCT Scan",
+                "files": dcm_files
+            }
+        
+        return jsonify({"series": list(series_map.values())})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     print(f"Starting Flask server...")
     print(f"Root folder: {ROOT_FOLDER}")
     app.run(debug=True, port=5000)
+
