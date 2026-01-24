@@ -119,7 +119,7 @@ class RegistrationViewer {
             // Create material based on role
             let material;
             if (role === 'source') {
-                // Source: colored with vertex colors or blue highlight
+                // Source: use original vertex colors from file
                 if (geometry.attributes.color) {
                     material = new THREE.MeshPhongMaterial({
                         vertexColors: true,
@@ -131,11 +131,9 @@ class RegistrationViewer {
                         opacity: 1.0
                     });
                 } else {
-                    // Generate gradient colors
-                    const colors = this.generateGradientColors(geometry);
-                    geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
+                    // Use neutral light gray if no colors in file
                     material = new THREE.MeshPhongMaterial({
-                        vertexColors: true,
+                        color: 0xcccccc,
                         specular: 0x111111,
                         shininess: 200,
                         flatShading: false,
@@ -145,16 +143,29 @@ class RegistrationViewer {
                     });
                 }
             } else if (role === 'target') {
-                // Target: gray, fixed reference
-                material = new THREE.MeshPhongMaterial({
-                    color: 0x888888,
-                    specular: 0x111111,
-                    shininess: 100,
-                    flatShading: false,
-                    side: THREE.DoubleSide,
-                    transparent: true,
-                    opacity: 1.0
-                });
+                // Target: use original vertex colors from file
+                if (geometry.attributes.color) {
+                    material = new THREE.MeshPhongMaterial({
+                        vertexColors: true,
+                        specular: 0x111111,
+                        shininess: 200,
+                        flatShading: false,
+                        side: THREE.DoubleSide,
+                        transparent: true,
+                        opacity: 1.0
+                    });
+                } else {
+                    // Use neutral light gray if no colors in file
+                    material = new THREE.MeshPhongMaterial({
+                        color: 0xcccccc,
+                        specular: 0x111111,
+                        shininess: 200,
+                        flatShading: false,
+                        side: THREE.DoubleSide,
+                        transparent: true,
+                        opacity: 1.0
+                    });
+                }
             }
 
             const mesh = new THREE.Mesh(geometry, material);
