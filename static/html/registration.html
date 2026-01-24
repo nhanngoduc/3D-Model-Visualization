@@ -42,11 +42,23 @@
                     
                     <!-- Source Model -->
                     <div class="model-selector">
-                        <label for="sourceModel" class="selector-label">Source Model (Movable)</label>
-                        <select id="sourceModel" class="custom-select">
-                            <option value="">-- Select Source Model --</option>
-                        </select>
+                        <label class="selector-label">Source Model (Movable)</label>
                         <small class="selector-hint">Will be aligned to target</small>
+                        
+                        <label for="sourcePatient" class="mini-label">Patient</label>
+                        <select id="sourcePatient" class="custom-select">
+                            <option value="">-- Select Patient --</option>
+                        </select>
+                        
+                        <label for="sourceDataType" class="mini-label">Data Type</label>
+                        <select id="sourceDataType" class="custom-select" disabled>
+                            <option value="">-- Select Data Type --</option>
+                        </select>
+                        
+                        <label for="sourceModel" class="mini-label">Model</label>
+                        <select id="sourceModel" class="custom-select" disabled>
+                            <option value="">-- Select Model --</option>
+                        </select>
                     </div>
 
                     <!-- Swap Button -->
@@ -57,11 +69,23 @@
 
                     <!-- Target Model -->
                     <div class="model-selector">
-                        <label for="targetModel" class="selector-label">Target Model (Fixed)</label>
-                        <select id="targetModel" class="custom-select">
-                            <option value="">-- Select Target Model --</option>
-                        </select>
+                        <label class="selector-label">Target Model (Fixed)</label>
                         <small class="selector-hint">Reference (will not move)</small>
+                        
+                        <label for="targetPatient" class="mini-label">Patient</label>
+                        <select id="targetPatient" class="custom-select">
+                            <option value="">-- Select Patient --</option>
+                        </select>
+                        
+                        <label for="targetDataType" class="mini-label">Data Type</label>
+                        <select id="targetDataType" class="custom-select" disabled>
+                            <option value="">-- Select Data Type --</option>
+                        </select>
+                        
+                        <label for="targetModel" class="mini-label">Model</label>
+                        <select id="targetModel" class="custom-select" disabled>
+                            <option value="">-- Select Model --</option>
+                        </select>
                     </div>
 
                     <!-- Direction Indicator -->

@@ -34,7 +34,7 @@ async function loadAllPatients() {
                 currentPatientData[patient.id] = patientData.data;
             }
             
-            populateModelSelectors();
+            populatePatientSelectors();
         }
     } catch (error) {
         console.error('Error loading patients:', error);
@@ -42,57 +42,124 @@ async function loadAllPatients() {
     }
 }
 
-// Populate source and target dropdown menus
-function populateModelSelectors() {
-    const sourceSelect = document.getElementById('sourceModel');
-    const targetSelect = document.getElementById('targetModel');
+// Populate patient dropdowns
+function populatePatientSelectors() {
+    const sourcePatientSelect = document.getElementById('sourcePatient');
+    const targetPatientSelect = document.getElementById('targetPatient');
     
-    sourceSelect.innerHTML = '<option value="">-- Select Source Model --</option>';
-    targetSelect.innerHTML = '<option value="">-- Select Target Model --</option>';
+    sourcePatientSelect.innerHTML = '<option value="">-- Select Patient --</option>';
+    targetPatientSelect.innerHTML = '<option value="">-- Select Patient --</option>';
     
-    // Generate options for each patient's models
     allPatients.forEach(patient => {
-        const patientData = currentPatientData[patient.id];
+        const option1 = createOption(patient.id, patient.name);
+        const option2 = createOption(patient.id, patient.name);
         
-        if (patientData) {
-            // Add Face scans
-            if (patientData['Face scans']) {
-                patientData['Face scans'].forEach(file => {
-                    const optionValue = JSON.stringify({
-                        patient_id: patient.id,
-                        data_type: 'Face scans',
-                        file_path: file.path,
-                        file_type: file.type,
-                        file_name: file.name
-                    });
-                    
-                    const optionText = `${patient.name} - Face Scan - ${file.name}`;
-                    
-                    sourceSelect.appendChild(createOption(optionValue, optionText));
-                    targetSelect.appendChild(createOption(optionValue, optionText));
-                });
-            }
-            
-            // Add Intraoral scans
-            if (patientData['Intraoral scans']) {
-                patientData['Intraoral scans'].forEach(file => {
-                    const optionValue = JSON.stringify({
-                        patient_id: patient.id,
-                        data_type: 'Intraoral scans',
-                        file_path: file.path,
-                        file_type: file.type,
-                        file_name: file.name
-                    });
-                    
-                    const optionText = `${patient.name} - Intraoral - ${file.name}`;
-                    
-                    sourceSelect.appendChild(createOption(optionValue, optionText));
-                    targetSelect.appendChild(createOption(optionValue, optionText));
-                });
-            }
-            
-            // Note: CBCT will be handled as series later in REG-05
+        sourcePatientSelect.appendChild(option1);
+        targetPatientSelect.appendChild(option2);
+    });
+}
+
+// Handle patient selection change
+function onSourcePatientChange(patientId) {
+    const dataTypeSelect = document.getElementById('sourceDataType');
+    const modelSelect = document.getElementById('sourceModel');
+    
+    dataTypeSelect.innerHTML = '<option value="">-- Select Data Type --</option>';
+    modelSelect.innerHTML = '<option value="">-- Select Model --</option>';
+    dataTypeSelect.disabled = !patientId;
+    modelSelect.disabled = true;
+    
+    if (!patientId) return;
+    
+    const patientData = currentPatientData[patientId];
+    if (!patientData) return;
+    
+    // Add available data types
+    const dataTypes = ['Face scans', 'Intraoral scans', 'Pre-Op CBCT'];
+    dataTypes.forEach(dataType => {
+        if (patientData[dataType] && patientData[dataType].length > 0) {
+            const option = createOption(dataType, dataType);
+            dataTypeSelect.appendChild(option);
         }
+    });
+}
+
+function onTargetPatientChange(patientId) {
+    const dataTypeSelect = document.getElementById('targetDataType');
+    const modelSelect = document.getElementById('targetModel');
+    
+    dataTypeSelect.innerHTML = '<option value="">-- Select Data Type --</option>';
+    modelSelect.innerHTML = '<option value="">-- Select Model --</option>';
+    dataTypeSelect.disabled = !patientId;
+    modelSelect.disabled = true;
+    
+    if (!patientId) return;
+    
+    const patientData = currentPatientData[patientId];
+    if (!patientData) return;
+    
+    // Add available data types
+    const dataTypes = ['Face scans', 'Intraoral scans', 'Pre-Op CBCT'];
+    dataTypes.forEach(dataType => {
+        if (patientData[dataType] && patientData[dataType].length > 0) {
+            const option = createOption(dataType, dataType);
+            dataTypeSelect.appendChild(option);
+        }
+    });
+}
+
+// Handle data type selection change
+function onSourceDataTypeChange(dataType) {
+    const patientId = document.getElementById('sourcePatient').value;
+    const modelSelect = document.getElementById('sourceModel');
+    
+    modelSelect.innerHTML = '<option value="">-- Select Model --</option>';
+    modelSelect.disabled = !dataType;
+    
+    if (!dataType || !patientId) return;
+    
+    const patientData = currentPatientData[patientId];
+    if (!patientData || !patientData[dataType]) return;
+    
+    // Add available models
+    patientData[dataType].forEach(file => {
+        const optionValue = JSON.stringify({
+            patient_id: patientId,
+            data_type: dataType,
+            file_path: file.path,
+            file_type: file.type,
+            file_name: file.name
+        });
+        
+        const option = createOption(optionValue, file.name);
+        modelSelect.appendChild(option);
+    });
+}
+
+function onTargetDataTypeChange(dataType) {
+    const patientId = document.getElementById('targetPatient').value;
+    const modelSelect = document.getElementById('targetModel');
+    
+    modelSelect.innerHTML = '<option value="">-- Select Model --</option>';
+    modelSelect.disabled = !dataType;
+    
+    if (!dataType || !patientId) return;
+    
+    const patientData = currentPatientData[patientId];
+    if (!patientData || !patientData[dataType]) return;
+    
+    // Add available models
+    patientData[dataType].forEach(file => {
+        const optionValue = JSON.stringify({
+            patient_id: patientId,
+            data_type: dataType,
+            file_path: file.path,
+            file_type: file.type,
+            file_name: file.name
+        });
+        
+        const option = createOption(optionValue, file.name);
+        modelSelect.appendChild(option);
     });
 }
 
@@ -105,19 +172,42 @@ function createOption(value, text) {
 
 // Setup event listeners
 function setupEventListeners() {
-    const sourceSelect = document.getElementById('sourceModel');
-    const targetSelect = document.getElementById('targetModel');
+    const sourcePatientSelect = document.getElementById('sourcePatient');
+    const sourceDataTypeSelect = document.getElementById('sourceDataType');
+    const sourceModelSelect = document.getElementById('sourceModel');
+    
+    const targetPatientSelect = document.getElementById('targetPatient');
+    const targetDataTypeSelect = document.getElementById('targetDataType');
+    const targetModelSelect = document.getElementById('targetModel');
+    
     const swapBtn = document.getElementById('swapModelsBtn');
     const proceedBtn = document.getElementById('proceedBtn');
     const continueRegBtn = document.getElementById('continueRegBtn');
     
-    // REG-01.4: Validate on selection change
-    sourceSelect.addEventListener('change', (e) => {
+    // Source dropdowns
+    sourcePatientSelect.addEventListener('change', (e) => {
+        onSourcePatientChange(e.target.value);
+    });
+    
+    sourceDataTypeSelect.addEventListener('change', (e) => {
+        onSourceDataTypeChange(e.target.value);
+    });
+    
+    sourceModelSelect.addEventListener('change', (e) => {
         selectedSource = e.target.value ? JSON.parse(e.target.value) : null;
         validateSelection();
     });
     
-    targetSelect.addEventListener('change', (e) => {
+    // Target dropdowns
+    targetPatientSelect.addEventListener('change', (e) => {
+        onTargetPatientChange(e.target.value);
+    });
+    
+    targetDataTypeSelect.addEventListener('change', (e) => {
+        onTargetDataTypeChange(e.target.value);
+    });
+    
+    targetModelSelect.addEventListener('change', (e) => {
         selectedTarget = e.target.value ? JSON.parse(e.target.value) : null;
         validateSelection();
     });
@@ -169,8 +259,6 @@ function setupEventListeners() {
 
 // REG-01.4: Validate source ≠ target
 function validateSelection() {
-    const sourceSelect = document.getElementById('sourceModel');
-    const targetSelect = document.getElementById('targetModel');
     const proceedBtn = document.getElementById('proceedBtn');
     const directionIndicator = document.getElementById('directionIndicator');
     const validationMessage = document.getElementById('validationMessage');
@@ -205,17 +293,47 @@ function showValidationMessage(message, type) {
 
 // REG-01.3: Swap source and target
 function swapModels() {
-    const sourceSelect = document.getElementById('sourceModel');
-    const targetSelect = document.getElementById('targetModel');
+    const sourcePatient = document.getElementById('sourcePatient');
+    const sourceDataType = document.getElementById('sourceDataType');
+    const sourceModel = document.getElementById('sourceModel');
     
-    const temp = sourceSelect.value;
-    sourceSelect.value = targetSelect.value;
-    targetSelect.value = temp;
+    const targetPatient = document.getElementById('targetPatient');
+    const targetDataType = document.getElementById('targetDataType');
+    const targetModel = document.getElementById('targetModel');
     
-    selectedSource = sourceSelect.value ? JSON.parse(sourceSelect.value) : null;
-    selectedTarget = targetSelect.value ? JSON.parse(targetSelect.value) : null;
+    // Swap patient
+    const tempPatient = sourcePatient.value;
+    sourcePatient.value = targetPatient.value;
+    targetPatient.value = tempPatient;
     
-    validateSelection();
+    // Refresh data types
+    onSourcePatientChange(sourcePatient.value);
+    onTargetPatientChange(targetPatient.value);
+    
+    // Small delay to let data types populate
+    setTimeout(() => {
+        // Swap data type
+        const tempDataType = sourceDataType.value;
+        sourceDataType.value = targetDataType.value;
+        targetDataType.value = tempDataType;
+        
+        // Refresh models
+        onSourceDataTypeChange(sourceDataType.value);
+        onTargetDataTypeChange(targetDataType.value);
+        
+        // Small delay to let models populate
+        setTimeout(() => {
+            // Swap model
+            const tempModel = sourceModel.value;
+            sourceModel.value = targetModel.value;
+            targetModel.value = tempModel;
+            
+            selectedSource = sourceModel.value ? JSON.parse(sourceModel.value) : null;
+            selectedTarget = targetModel.value ? JSON.parse(targetModel.value) : null;
+            
+            validateSelection();
+        }, 50);
+    }, 50);
 }
 
 // REG-01.6 & REG-02: Load models into overlay viewer

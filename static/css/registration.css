@@ -23,7 +23,7 @@
 
 .selector-label {
     display: block;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.75rem;
     font-weight: 600;
     color: #e0e0e0;
     font-size: 0.9rem;
@@ -31,10 +31,19 @@
 
 .selector-hint {
     display: block;
-    margin-top: 0.25rem;
+    margin-bottom: 1rem;
     color: #888;
     font-size: 0.8rem;
     font-style: italic;
+}
+
+.mini-label {
+    display: block;
+    margin-top: 0.75rem;
+    margin-bottom: 0.4rem;
+    font-weight: 500;
+    color: #b0b0b0;
+    font-size: 0.85rem;
 }
 
 /* ===== Direction Indicator ===== */
