@@ -5,6 +5,8 @@
 const API_BASE = 'http://localhost:5000/api';
 
 let registrationViewer = null;
+let splitViewViewer = null;
+let dicomViewer = null;
 let allPatients = [];
 let currentPatientData = {};
 let selectedSource = null;
@@ -225,36 +227,38 @@ function setupEventListeners() {
     
     // REG-02: Viewer controls
     document.getElementById('toggleSource').addEventListener('change', (e) => {
-        if (registrationViewer) {
-            registrationViewer.toggleSourceVisibility(e.target.checked);
-        }
+        if (splitViewViewer) splitViewViewer.toggleSourceVisibility(e.target.checked);
+        if (registrationViewer) registrationViewer.toggleSourceVisibility(e.target.checked);
     });
     
     document.getElementById('toggleTarget').addEventListener('change', (e) => {
-        if (registrationViewer) {
-            registrationViewer.toggleTargetVisibility(e.target.checked);
-        }
+        if (splitViewViewer) splitViewViewer.toggleTargetVisibility(e.target.checked);
+        if (registrationViewer) registrationViewer.toggleTargetVisibility(e.target.checked);
     });
     
     document.getElementById('sourceOpacity').addEventListener('input', (e) => {
-        if (registrationViewer) {
-            registrationViewer.setSourceOpacity(e.target.value);
-            document.getElementById('sourceOpacityValue').textContent = e.target.value + '%';
-        }
+        if (splitViewViewer) splitViewViewer.setSourceOpacity(e.target.value);
+        if (registrationViewer) registrationViewer.setSourceOpacity(e.target.value);
+        document.getElementById('sourceOpacityValue').textContent = e.target.value + '%';
     });
     
     document.getElementById('targetOpacity').addEventListener('input', (e) => {
-        if (registrationViewer) {
-            registrationViewer.setTargetOpacity(e.target.value);
-            document.getElementById('targetOpacityValue').textContent = e.target.value + '%';
-        }
+        if (splitViewViewer) splitViewViewer.setTargetOpacity(e.target.value);
+        if (registrationViewer) registrationViewer.setTargetOpacity(e.target.value);
+        document.getElementById('targetOpacityValue').textContent = e.target.value + '%';
     });
     
     document.getElementById('cameraPreset').addEventListener('change', (e) => {
+        if (splitViewViewer) {
+            splitViewViewer.applyPreset(e.target.value);
+        }
         if (registrationViewer) {
             registrationViewer.applyPreset(e.target.value);
         }
     });
+
+    // Setup rotation controls
+    setupRotationControls();
 }
 
 // REG-01.4: Validate source ≠ target
@@ -340,43 +344,264 @@ function swapModels() {
 async function proceedToViewer() {
     try {
         // Show loading indicator
-        document.getElementById('loadingIndicator').style.display = 'flex';
-        document.getElementById('selectionView').style.display = 'none';
-        document.getElementById('viewerContainer').style.display = 'none';
+        const loadingInd = document.getElementById('loadingIndicator');
+        const selectionView = document.getElementById('selectionView');
+        const viewerContainer = document.getElementById('viewerContainer');
+        const splitViewCont = document.getElementById('splitViewContainer');
+        const dicomViewerCont = document.getElementById('dicomViewerContainer');
         
-        // Initialize overlay viewer if not already done
-        if (!registrationViewer) {
-            registrationViewer = new RegistrationViewer('registrationViewer');
+        if (loadingInd) loadingInd.style.display = 'flex';
+        if (selectionView) selectionView.style.display = 'none';
+        if (viewerContainer) viewerContainer.style.display = 'none';
+        if (splitViewCont) splitViewCont.style.display = 'none';
+        if (dicomViewerCont) dicomViewerCont.style.display = 'none';
+        
+        // Check if source or target is DICOM
+        const sourceIsDicom = selectedSource && selectedSource.file_type === 'dcm';
+        const targetIsDicom = selectedTarget && selectedTarget.file_type === 'dcm';
+        
+        // If either is DICOM, use DICOM viewer approach
+        if (sourceIsDicom || targetIsDicom) {
+            await loadDicomViewer(sourceIsDicom, targetIsDicom);
+        } else {
+            // Both are 3D models, use split view viewer
+            await load3DViewer();
         }
-        
-        // Construct file URLs
-        const sourceUrl = `${API_BASE}/file/${selectedSource.file_path}`;
-        const targetUrl = `${API_BASE}/file/${selectedTarget.file_path}`;
-        
-        // Load models
-        await registrationViewer.loadSourceAndTarget(
-            sourceUrl,
-            targetUrl,
-            selectedSource.file_type,
-            selectedTarget.file_type
-        );
-        
-        // Hide loading, show viewer and controls
-        document.getElementById('loadingIndicator').style.display = 'none';
-        document.getElementById('viewerContainer').style.display = 'block';
-        document.getElementById('viewerControlsPanel').style.display = 'block';
-        
-        // Trigger resize to ensure canvas is properly sized
-        window.dispatchEvent(new Event('resize'));
         
         console.log('Models loaded successfully!');
         
     } catch (error) {
         console.error('Error loading models:', error);
-        document.getElementById('loadingIndicator').style.display = 'none';
-        document.getElementById('selectionView').style.display = 'flex';
+        
+        const loadingInd = document.getElementById('loadingIndicator');
+        const selectionView = document.getElementById('selectionView');
+        
+        if (loadingInd) loadingInd.style.display = 'none';
+        if (selectionView) selectionView.style.display = 'flex';
+        
         showValidationMessage('Error loading models: ' + error.message, 'error');
     }
+}
+
+// Setup rotation controls for models
+function setupRotationControls() {
+    const rotationAmount = 5; // degrees per click
+    
+    // Keyboard shortcuts to select model (1 for Source, 2 for Target)
+    document.addEventListener('keydown', (e) => {
+        if (!registrationViewer) return;
+        
+        if (e.key === '1') {
+            registrationViewer.setSelectedModel('source');
+            console.log('Selected Source Model for rotation');
+        } else if (e.key === '2') {
+            registrationViewer.setSelectedModel('target');
+            console.log('Selected Target Model for rotation');
+        } else if (e.key === '0') {
+            registrationViewer.setSelectedModel(null);
+            console.log('Deselected model - Camera mode');
+        }
+    });
+    
+    // Source Model Rotation
+    document.getElementById('sourceRotateXPos')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.rotateSourceModel('x', rotationAmount);
+        if (registrationViewer) registrationViewer.rotateSourceModel('x', rotationAmount);
+    });
+    document.getElementById('sourceRotateXNeg')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.rotateSourceModel('x', -rotationAmount);
+        if (registrationViewer) registrationViewer.rotateSourceModel('x', -rotationAmount);
+    });
+    document.getElementById('sourceRotateYPos')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.rotateSourceModel('y', rotationAmount);
+        if (registrationViewer) registrationViewer.rotateSourceModel('y', rotationAmount);
+    });
+    document.getElementById('sourceRotateYNeg')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.rotateSourceModel('y', -rotationAmount);
+        if (registrationViewer) registrationViewer.rotateSourceModel('y', -rotationAmount);
+    });
+    document.getElementById('sourceRotateZPos')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.rotateSourceModel('z', rotationAmount);
+        if (registrationViewer) registrationViewer.rotateSourceModel('z', rotationAmount);
+    });
+    document.getElementById('sourceRotateZNeg')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.rotateSourceModel('z', -rotationAmount);
+        if (registrationViewer) registrationViewer.rotateSourceModel('z', -rotationAmount);
+    });
+    document.getElementById('sourceResetRotation')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.resetSourceRotation();
+        if (registrationViewer) registrationViewer.resetSourceRotation();
+    });
+
+    // Target Model Rotation
+    document.getElementById('targetRotateXPos')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.rotateTargetModel('x', rotationAmount);
+        if (registrationViewer) registrationViewer.rotateTargetModel('x', rotationAmount);
+    });
+    document.getElementById('targetRotateXNeg')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.rotateTargetModel('x', -rotationAmount);
+        if (registrationViewer) registrationViewer.rotateTargetModel('x', -rotationAmount);
+    });
+    document.getElementById('targetRotateYPos')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.rotateTargetModel('y', rotationAmount);
+        if (registrationViewer) registrationViewer.rotateTargetModel('y', rotationAmount);
+    });
+    document.getElementById('targetRotateYNeg')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.rotateTargetModel('y', -rotationAmount);
+        if (registrationViewer) registrationViewer.rotateTargetModel('y', -rotationAmount);
+    });
+    document.getElementById('targetRotateZPos')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.rotateTargetModel('z', rotationAmount);
+        if (registrationViewer) registrationViewer.rotateTargetModel('z', rotationAmount);
+    });
+    document.getElementById('targetRotateZNeg')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.rotateTargetModel('z', -rotationAmount);
+        if (registrationViewer) registrationViewer.rotateTargetModel('z', -rotationAmount);
+    });
+    document.getElementById('targetResetRotation')?.addEventListener('click', () => {
+        if (splitViewViewer) splitViewViewer.resetTargetRotation();
+        if (registrationViewer) registrationViewer.resetTargetRotation();
+    });
+}
+
+// Load 3D registration viewer (split view)
+async function load3DViewer() {
+    try {
+        // Validate selections
+        if (!selectedSource || !selectedTarget) {
+            throw new Error('Please select both source and target models');
+        }
+        
+        // Check canvas elements exist
+        const sourceCanvas = document.getElementById('sourceViewer');
+        const targetCanvas = document.getElementById('targetViewer');
+        
+        if (!sourceCanvas || !targetCanvas) {
+            throw new Error('Canvas elements not found in HTML');
+        }
+        
+        // Initialize split view viewer with canvas IDs
+        if (!splitViewViewer) {
+            splitViewViewer = new SplitViewViewer('sourceViewer', 'targetViewer');
+        }
+        
+        // Construct file URLs
+        const sourceUrl = `${API_BASE}/file/${encodeURIComponent(selectedSource.file_path)}`;
+        const targetUrl = `${API_BASE}/file/${encodeURIComponent(selectedTarget.file_path)}`;
+        
+        // Load models into respective viewers
+        console.log('Loading source model:', sourceUrl);
+        await splitViewViewer.sourceViewer.loadModel(sourceUrl, selectedSource.file_type);
+        
+        console.log('Loading target model:', targetUrl);
+        await splitViewViewer.targetViewer.loadModel(targetUrl, selectedTarget.file_type);
+        
+        // Hide loading, show split view and controls
+        const loadingInd = document.getElementById('loadingIndicator');
+        const viewerCtrls = document.getElementById('viewerControlsPanel');
+        
+        if (loadingInd) loadingInd.style.display = 'none';
+        document.getElementById('splitViewContainer').style.display = 'flex';
+        if (viewerCtrls) viewerCtrls.style.display = 'block';
+        
+        // Trigger resize to ensure canvases are properly sized
+        window.dispatchEvent(new Event('resize'));
+        
+        console.log('3D viewers loaded successfully');
+    } catch (error) {
+        console.error('Error in load3DViewer:', error);
+        throw error;
+    }
+}
+
+// Load DICOM viewer
+async function loadDicomViewer(sourceIsDicom, targetIsDicom) {
+    try {
+        // Initialize DICOM viewer if not already done
+        if (!dicomViewer) {
+            const dicomCanvas = document.getElementById('dicomViewer');
+            if (!dicomCanvas) {
+                throw new Error('DICOM canvas element not found');
+            }
+            dicomViewer = new DicomViewer2D('dicomViewer');
+            await dicomViewer.init();
+            setupDicomControls();
+        }
+        
+        // For now, load the first available DICOM series (prefer source if available)
+        const dicomModel = sourceIsDicom ? selectedSource : selectedTarget;
+        
+        // Get DICOM series
+        const response = await fetch(`${API_BASE}/cbct-series/${dicomModel.patient_id}`);
+        const data = await response.json();
+        
+        if (!data.series || data.series.length === 0) {
+            throw new Error('No DICOM files found');
+        }
+        
+        // Load first series
+        const series = data.series[0];
+        await dicomViewer.loadDicomSeries(series.files);
+        
+        // Hide loading, show DICOM viewer
+        const loadingInd = document.getElementById('loadingIndicator');
+        const dicomCont = document.getElementById('dicomViewerContainer');
+        const viewerCtrls = document.getElementById('viewerControlsPanel');
+        
+        if (loadingInd) loadingInd.style.display = 'none';
+        if (dicomCont) dicomCont.style.display = 'flex';
+        if (viewerCtrls) viewerCtrls.style.display = 'none';
+        
+        // Update slider max value
+        const slider = document.getElementById('dicomSliceSlider');
+        if (slider) {
+            slider.max = series.files.length - 1;
+        }
+        
+        // Trigger resize
+        window.dispatchEvent(new Event('resize'));
+    } catch (error) {
+        console.error('Error in loadDicomViewer:', error);
+        throw error;
+    }
+}
+
+// Setup DICOM viewer controls
+function setupDicomControls() {
+    const prevBtn = document.getElementById('dicomPrevBtn');
+    const nextBtn = document.getElementById('dicomNextBtn');
+    const slider = document.getElementById('dicomSliceSlider');
+    
+    if (!prevBtn || !nextBtn || !slider) {
+        console.warn('DICOM control elements not found');
+        return;
+    }
+    
+    prevBtn.addEventListener('click', () => {
+        if (dicomViewer) {
+            const index = dicomViewer.getCurrentIndex();
+            if (index > 0) {
+                dicomViewer.goToSlice(index - 1);
+                slider.value = index - 1;
+            }
+        }
+    });
+    
+    nextBtn.addEventListener('click', () => {
+        if (dicomViewer) {
+            const index = dicomViewer.getCurrentIndex();
+            if (index < dicomViewer.getFileCount() - 1) {
+                dicomViewer.goToSlice(index + 1);
+                slider.value = index + 1;
+            }
+        }
+    });
+    
+    slider.addEventListener('input', (e) => {
+        if (dicomViewer) {
+            dicomViewer.goToSlice(parseInt(e.target.value));
+        }
+    });
 }
 
 // Initialize when page loads

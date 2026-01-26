@@ -13,6 +13,14 @@ class RegistrationViewer {
         this.sourceMesh = null;
         this.targetMesh = null;
         
+        // Mouse interaction
+        this.raycaster = new THREE.Raycaster();
+        this.mouse = new THREE.Vector2();
+        this.selectedModel = null; // 'source' or 'target'
+        this.isDragging = false;
+        this.previousMousePosition = { x: 0, y: 0 };
+        this.rotationSpeed = 0.01;
+        
         // State
         this.cameraPresets = {
             isometric: { pos: [5, 5, 5], target: [0, 0, 0] },
@@ -63,17 +71,116 @@ class RegistrationViewer {
         directionalLight2.position.set(-5, -5, -5);
         this.scene.add(directionalLight2);
 
-        // Add orbit controls
+        // Add orbit controls (disabled by default when rotating models)
         this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
         this.controls.screenSpacePanning = false;
+
+        // Setup mouse interaction
+        this.setupMouseInteraction();
 
         // Handle window resize
         window.addEventListener('resize', () => this.onWindowResize());
 
         // Start animation loop
         this.animate();
+    }
+
+    setupMouseInteraction() {
+        this.canvas.addEventListener('mousedown', (e) => this.onMouseDown(e));
+        this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
+        this.canvas.addEventListener('mouseup', (e) => this.onMouseUp(e));
+        this.canvas.addEventListener('mouseleave', (e) => this.onMouseLeave(e));
+    }
+
+    onMouseDown(event) {
+        // Calculate mouse position in normalized device coordinates
+        const rect = this.canvas.getBoundingClientRect();
+        this.mouse.x = ((event.clientX - rect.left) / this.canvas.clientWidth) * 2 - 1;
+        this.mouse.y = -((event.clientY - rect.top) / this.canvas.clientHeight) * 2 + 1;
+
+        // Get objects intersecting the picking ray
+        this.raycaster.setFromCamera(this.mouse, this.camera);
+        
+        const meshes = [];
+        if (this.sourceMesh) meshes.push(this.sourceMesh);
+        if (this.targetMesh) meshes.push(this.targetMesh);
+        
+        const intersects = this.raycaster.intersectObjects(meshes);
+
+        if (intersects.length > 0) {
+            const clickedMesh = intersects[0].object;
+            
+            // Determine which model was clicked
+            if (clickedMesh === this.sourceMesh) {
+                this.selectedModel = 'source';
+            } else if (clickedMesh === this.targetMesh) {
+                this.selectedModel = 'target';
+            }
+            
+            this.isDragging = true;
+            this.previousMousePosition = { x: event.clientX, y: event.clientY };
+            
+            // Disable camera controls when rotating a model
+            this.controls.enabled = false;
+            
+            // Visual feedback - highlight selected model
+            this.updateModelHighlight();
+        }
+    }
+
+    onMouseMove(event) {
+        if (!this.isDragging || !this.selectedModel) return;
+
+        const deltaX = event.clientX - this.previousMousePosition.x;
+        const deltaY = event.clientY - this.previousMousePosition.y;
+
+        const model = this.selectedModel === 'source' ? this.sourceMesh : this.targetMesh;
+        
+        if (model) {
+            // Rotate based on mouse movement
+            model.rotation.y += deltaX * this.rotationSpeed;
+            model.rotation.x += deltaY * this.rotationSpeed;
+        }
+
+        this.previousMousePosition = { x: event.clientX, y: event.clientY };
+    }
+
+    onMouseUp(event) {
+        this.isDragging = false;
+        
+        // Re-enable camera controls
+        this.controls.enabled = true;
+        
+        // Remove highlight
+        this.updateModelHighlight();
+    }
+
+    onMouseLeave(event) {
+        this.isDragging = false;
+        this.selectedModel = null;
+        this.controls.enabled = true;
+        this.updateModelHighlight();
+    }
+
+    updateModelHighlight() {
+        // Add/remove outline or change material to indicate selection
+        if (this.sourceMesh && this.sourceMesh.material) {
+            if (this.selectedModel === 'source') {
+                this.sourceMesh.material.emissive.setHex(0x334455);
+            } else {
+                this.sourceMesh.material.emissive.setHex(0x000000);
+            }
+        }
+
+        if (this.targetMesh && this.targetMesh.material) {
+            if (this.selectedModel === 'target') {
+                this.targetMesh.material.emissive.setHex(0x334455);
+            } else {
+                this.targetMesh.material.emissive.setHex(0x000000);
+            }
+        }
     }
 
     // REG-01.6 & REG-02.1: Load both source and target models
@@ -302,6 +409,46 @@ class RegistrationViewer {
         requestAnimationFrame(() => this.animate());
         this.controls.update();
         this.renderer.render(this.scene, this.camera);
+    }
+
+    // Model Rotation Methods
+    rotateSourceModel(axis, amount) {
+        if (!this.sourceMesh) return;
+        
+        const rotation = amount * Math.PI / 180; // Convert to radians
+        
+        if (axis === 'x') this.sourceMesh.rotation.x += rotation;
+        else if (axis === 'y') this.sourceMesh.rotation.y += rotation;
+        else if (axis === 'z') this.sourceMesh.rotation.z += rotation;
+    }
+
+    rotateTargetModel(axis, amount) {
+        if (!this.targetMesh) return;
+        
+        const rotation = amount * Math.PI / 180; // Convert to radians
+        
+        if (axis === 'x') this.targetMesh.rotation.x += rotation;
+        else if (axis === 'y') this.targetMesh.rotation.y += rotation;
+        else if (axis === 'z') this.targetMesh.rotation.z += rotation;
+    }
+
+    resetSourceRotation() {
+        if (!this.sourceMesh) return;
+        this.sourceMesh.rotation.set(0, 0, 0);
+    }
+
+    resetTargetRotation() {
+        if (!this.targetMesh) return;
+        this.targetMesh.rotation.set(0, 0, 0);
+    }
+
+    getSelectedModel() {
+        return this.selectedModel;
+    }
+
+    setSelectedModel(modelName) {
+        this.selectedModel = modelName; // 'source', 'target', or null
+        this.updateModelHighlight();
     }
 
     dispose() {

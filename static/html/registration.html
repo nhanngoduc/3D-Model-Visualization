@@ -139,6 +139,39 @@
                         </div>
                     </div>
 
+                    <!-- Model Rotation Controls -->
+                    <div class="control-group rotation-controls">
+                        <h3 class="control-subtitle">Model Rotation</h3>
+                        
+                        <!-- Source Rotation -->
+                        <div class="rotation-model-group">
+                            <label class="rotation-label">Source Model</label>
+                            <div class="rotation-buttons">
+                                <button class="btn-rotation" id="sourceRotateXPos" title="Rotate X+">X+</button>
+                                <button class="btn-rotation" id="sourceRotateXNeg" title="Rotate X-">X-</button>
+                                <button class="btn-rotation" id="sourceRotateYPos" title="Rotate Y+">Y+</button>
+                                <button class="btn-rotation" id="sourceRotateYNeg" title="Rotate Y-">Y-</button>
+                                <button class="btn-rotation" id="sourceRotateZPos" title="Rotate Z+">Z+</button>
+                                <button class="btn-rotation" id="sourceRotateZNeg" title="Rotate Z-">Z-</button>
+                            </div>
+                            <button class="btn btn-small" id="sourceResetRotation">Reset Rotation</button>
+                        </div>
+
+                        <!-- Target Rotation -->
+                        <div class="rotation-model-group">
+                            <label class="rotation-label">Target Model</label>
+                            <div class="rotation-buttons">
+                                <button class="btn-rotation" id="targetRotateXPos" title="Rotate X+">X+</button>
+                                <button class="btn-rotation" id="targetRotateXNeg" title="Rotate X-">X-</button>
+                                <button class="btn-rotation" id="targetRotateYPos" title="Rotate Y+">Y+</button>
+                                <button class="btn-rotation" id="targetRotateYNeg" title="Rotate Y-">Y-</button>
+                                <button class="btn-rotation" id="targetRotateZPos" title="Rotate Z+">Z+</button>
+                                <button class="btn-rotation" id="targetRotateZNeg" title="Rotate Z-">Z-</button>
+                            </div>
+                            <button class="btn btn-small" id="targetResetRotation">Reset Rotation</button>
+                        </div>
+                    </div>
+
                     <!-- Camera Presets -->
                     <div class="control-group">
                         <label for="cameraPreset">Camera Preset</label>
@@ -174,6 +207,30 @@
                     <canvas id="registrationViewer" style="display: block; width: 100%; height: 100%;"></canvas>
                 </div>
 
+                <!-- Split View Viewer (Source and Target side-by-side) -->
+                <div id="splitViewContainer" class="split-view-container" style="display: none; width: 100%; height: 100%;">
+                    <div class="split-view-panel">
+                        <div class="panel-header">Source Model</div>
+                        <canvas id="sourceViewer" class="split-view-canvas"></canvas>
+                    </div>
+                    <div class="split-view-divider"></div>
+                    <div class="split-view-panel">
+                        <div class="panel-header">Target Model</div>
+                        <canvas id="targetViewer" class="split-view-canvas"></canvas>
+                    </div>
+                </div>
+
+                <!-- DICOM 2D Viewer Container -->
+                <div id="dicomViewerContainer" class="dicom-viewer-container" style="display: none; width: 100%; height: 100%; position: relative; flex-direction: column;">
+                    <div class="dicom-controls">
+                        <button id="dicomPrevBtn" class="btn btn-small">← Previous</button>
+                        <span id="dicomSliceInfo" class="dicom-info">Loading...</span>
+                        <button id="dicomNextBtn" class="btn btn-small">Next →</button>
+                        <input type="range" id="dicomSliceSlider" min="0" max="100" value="0" class="dicom-slider" style="flex: 1; margin: 0 10px;">
+                    </div>
+                    <canvas id="dicomViewer" style="flex: 1; background: #1a1a2e;"></canvas>
+                </div>
+
                 <!-- Loading Indicator -->
                 <div id="loadingIndicator" class="loading-indicator" style="display: none;">
                     <div class="spinner"></div>
@@ -189,6 +246,8 @@
     <script src="../js/STLLoader.js"></script>
     <script src="../js/OrbitControls.js"></script>
     
+    <script src="../js/splitViewViewer.js"></script>
+    <script src="../js/dicomViewer2D.js"></script>
     <script src="../js/registration-viewer.js?v=4"></script>
     <script src="../js/registration.js?v=4"></script>
 </body>

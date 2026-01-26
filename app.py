@@ -9,6 +9,11 @@ CORS(app)  # Enable CORS for all routes
 # Đường dẫn đến thư mục gốc chứa các thư mục dữ liệu
 ROOT_FOLDER = r"D:\Lab\3D Model Visualization\Cases for AI Fernando Polanco\Cases for AI Fernando Polanco"
 
+print(f"Starting Flask server...")
+print(f"Root folder: {ROOT_FOLDER}")
+print(f"Root folder exists: {os.path.exists(ROOT_FOLDER)}")
+print(f"Root folder contents: {os.listdir(ROOT_FOLDER) if os.path.exists(ROOT_FOLDER) else 'N/A'}")
+
 @app.route('/')
 def index():
     """Serve the main HTML page"""
