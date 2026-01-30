@@ -15,7 +15,7 @@ let selectedTarget = null;
 // Initialize
 async function initRegistration() {
     console.log('Initializing Registration module...');
-    
+
     await loadAllPatients();
     setupEventListeners();
 }
@@ -25,17 +25,17 @@ async function loadAllPatients() {
     try {
         const response = await fetch(`${API_BASE}/patients`);
         const data = await response.json();
-        
+
         if (data.patients) {
             allPatients = data.patients;
-            
+
             // Load data for each patient
             for (const patient of allPatients) {
                 const dataResponse = await fetch(`${API_BASE}/patient/${patient.id}/data`);
                 const patientData = await dataResponse.json();
                 currentPatientData[patient.id] = patientData.data;
             }
-            
+
             populatePatientSelectors();
         }
     } catch (error) {
@@ -48,14 +48,14 @@ async function loadAllPatients() {
 function populatePatientSelectors() {
     const sourcePatientSelect = document.getElementById('sourcePatient');
     const targetPatientSelect = document.getElementById('targetPatient');
-    
+
     sourcePatientSelect.innerHTML = '<option value="">-- Select Patient --</option>';
     targetPatientSelect.innerHTML = '<option value="">-- Select Patient --</option>';
-    
+
     allPatients.forEach(patient => {
         const option1 = createOption(patient.id, patient.name);
         const option2 = createOption(patient.id, patient.name);
-        
+
         sourcePatientSelect.appendChild(option1);
         targetPatientSelect.appendChild(option2);
     });
@@ -65,17 +65,17 @@ function populatePatientSelectors() {
 function onSourcePatientChange(patientId) {
     const dataTypeSelect = document.getElementById('sourceDataType');
     const modelSelect = document.getElementById('sourceModel');
-    
+
     dataTypeSelect.innerHTML = '<option value="">-- Select Data Type --</option>';
     modelSelect.innerHTML = '<option value="">-- Select Model --</option>';
     dataTypeSelect.disabled = !patientId;
     modelSelect.disabled = true;
-    
+
     if (!patientId) return;
-    
+
     const patientData = currentPatientData[patientId];
     if (!patientData) return;
-    
+
     // Add available data types
     const dataTypes = ['Face scans', 'Intraoral scans', 'Pre-Op CBCT'];
     dataTypes.forEach(dataType => {
@@ -89,17 +89,17 @@ function onSourcePatientChange(patientId) {
 function onTargetPatientChange(patientId) {
     const dataTypeSelect = document.getElementById('targetDataType');
     const modelSelect = document.getElementById('targetModel');
-    
+
     dataTypeSelect.innerHTML = '<option value="">-- Select Data Type --</option>';
     modelSelect.innerHTML = '<option value="">-- Select Model --</option>';
     dataTypeSelect.disabled = !patientId;
     modelSelect.disabled = true;
-    
+
     if (!patientId) return;
-    
+
     const patientData = currentPatientData[patientId];
     if (!patientData) return;
-    
+
     // Add available data types
     const dataTypes = ['Face scans', 'Intraoral scans', 'Pre-Op CBCT'];
     dataTypes.forEach(dataType => {
@@ -114,15 +114,15 @@ function onTargetPatientChange(patientId) {
 function onSourceDataTypeChange(dataType) {
     const patientId = document.getElementById('sourcePatient').value;
     const modelSelect = document.getElementById('sourceModel');
-    
+
     modelSelect.innerHTML = '<option value="">-- Select Model --</option>';
     modelSelect.disabled = !dataType;
-    
+
     if (!dataType || !patientId) return;
-    
+
     const patientData = currentPatientData[patientId];
     if (!patientData || !patientData[dataType]) return;
-    
+
     // Add available models
     patientData[dataType].forEach(file => {
         const optionValue = JSON.stringify({
@@ -132,7 +132,7 @@ function onSourceDataTypeChange(dataType) {
             file_type: file.type,
             file_name: file.name
         });
-        
+
         const option = createOption(optionValue, file.name);
         modelSelect.appendChild(option);
     });
@@ -141,15 +141,15 @@ function onSourceDataTypeChange(dataType) {
 function onTargetDataTypeChange(dataType) {
     const patientId = document.getElementById('targetPatient').value;
     const modelSelect = document.getElementById('targetModel');
-    
+
     modelSelect.innerHTML = '<option value="">-- Select Model --</option>';
     modelSelect.disabled = !dataType;
-    
+
     if (!dataType || !patientId) return;
-    
+
     const patientData = currentPatientData[patientId];
     if (!patientData || !patientData[dataType]) return;
-    
+
     // Add available models
     patientData[dataType].forEach(file => {
         const optionValue = JSON.stringify({
@@ -159,7 +159,7 @@ function onTargetDataTypeChange(dataType) {
             file_type: file.type,
             file_name: file.name
         });
-        
+
         const option = createOption(optionValue, file.name);
         modelSelect.appendChild(option);
     });
@@ -177,77 +177,97 @@ function setupEventListeners() {
     const sourcePatientSelect = document.getElementById('sourcePatient');
     const sourceDataTypeSelect = document.getElementById('sourceDataType');
     const sourceModelSelect = document.getElementById('sourceModel');
-    
+
     const targetPatientSelect = document.getElementById('targetPatient');
     const targetDataTypeSelect = document.getElementById('targetDataType');
     const targetModelSelect = document.getElementById('targetModel');
-    
+
     const swapBtn = document.getElementById('swapModelsBtn');
     const proceedBtn = document.getElementById('proceedBtn');
     const continueRegBtn = document.getElementById('continueRegBtn');
-    
+
     // Source dropdowns
     sourcePatientSelect.addEventListener('change', (e) => {
         onSourcePatientChange(e.target.value);
     });
-    
+
     sourceDataTypeSelect.addEventListener('change', (e) => {
         onSourceDataTypeChange(e.target.value);
     });
-    
+
     sourceModelSelect.addEventListener('change', (e) => {
         selectedSource = e.target.value ? JSON.parse(e.target.value) : null;
         validateSelection();
+        // If both selected and they point to the same file, allow proceeding with a warning
+        if (selectedSource && selectedTarget && selectedSource.file_path === selectedTarget.file_path) {
+            const proceedBtn = document.getElementById('proceedBtn');
+            proceedBtn.disabled = false;
+            showValidationMessage('Warning: Source and Target are the same model. Proceed to overlay for testing or manual registration.', 'warning');
+            document.getElementById('directionIndicator').style.display = 'flex';
+        }
     });
-    
+
     // Target dropdowns
     targetPatientSelect.addEventListener('change', (e) => {
         onTargetPatientChange(e.target.value);
     });
-    
+
     targetDataTypeSelect.addEventListener('change', (e) => {
         onTargetDataTypeChange(e.target.value);
     });
-    
+
     targetModelSelect.addEventListener('change', (e) => {
         selectedTarget = e.target.value ? JSON.parse(e.target.value) : null;
         validateSelection();
+        // If both selected and they point to the same file, allow proceeding with a warning
+        if (selectedSource && selectedTarget && selectedSource.file_path === selectedTarget.file_path) {
+            const proceedBtn = document.getElementById('proceedBtn');
+            proceedBtn.disabled = false;
+            showValidationMessage('Warning: Source and Target are the same model. Proceed to overlay for testing or manual registration.', 'warning');
+            document.getElementById('directionIndicator').style.display = 'flex';
+        }
     });
-    
+
     // REG-01.3: Swap source and target
     swapBtn.addEventListener('click', swapModels);
-    
+
     // Proceed to viewer
     proceedBtn.addEventListener('click', proceedToViewer);
-    
+
     // Continue registration (next story group)
     continueRegBtn.addEventListener('click', () => {
         alert('Next: REG-03 (Registration Type Detection)\nStory Group 2 coming soon...');
     });
-    
+
+    // Back to Selection
+    const backBtn = document.getElementById('backToSelectionBtn');
+    if (backBtn) {
+        backBtn.addEventListener('click', backToSelection);
+    }
+
     // REG-02: Viewer controls
     document.getElementById('toggleSource').addEventListener('change', (e) => {
         if (splitViewViewer) splitViewViewer.toggleSourceVisibility(e.target.checked);
         if (registrationViewer) registrationViewer.toggleSourceVisibility(e.target.checked);
     });
-    
+
     document.getElementById('toggleTarget').addEventListener('change', (e) => {
         if (splitViewViewer) splitViewViewer.toggleTargetVisibility(e.target.checked);
         if (registrationViewer) registrationViewer.toggleTargetVisibility(e.target.checked);
     });
-    
+
     document.getElementById('sourceOpacity').addEventListener('input', (e) => {
         if (splitViewViewer) splitViewViewer.setSourceOpacity(e.target.value);
         if (registrationViewer) registrationViewer.setSourceOpacity(e.target.value);
         document.getElementById('sourceOpacityValue').textContent = e.target.value + '%';
     });
-    
+
     document.getElementById('targetOpacity').addEventListener('input', (e) => {
         if (splitViewViewer) splitViewViewer.setTargetOpacity(e.target.value);
         if (registrationViewer) registrationViewer.setTargetOpacity(e.target.value);
         document.getElementById('targetOpacityValue').textContent = e.target.value + '%';
     });
-    
+
     document.getElementById('cameraPreset').addEventListener('change', (e) => {
         if (splitViewViewer) {
             splitViewViewer.applyPreset(e.target.value);
@@ -266,22 +286,24 @@ function validateSelection() {
     const proceedBtn = document.getElementById('proceedBtn');
     const directionIndicator = document.getElementById('directionIndicator');
     const validationMessage = document.getElementById('validationMessage');
-    
+
     proceedBtn.disabled = true;
     directionIndicator.style.display = 'none';
     validationMessage.style.display = 'none';
-    
+
     if (!selectedSource || !selectedTarget) {
         showValidationMessage('Please select both Source and Target models', 'warning');
         return;
     }
-    
-    // Check if source === target
+
+    // Check if source === target — allow same model with a warning for testing/manual registration
     if (selectedSource.file_path === selectedTarget.file_path) {
-        showValidationMessage('Source and Target must be different models', 'error');
+        showValidationMessage('Warning: Source and Target are the same model. Proceed to overlay for testing or manual registration.', 'warning');
+        directionIndicator.style.display = 'flex';
+        proceedBtn.disabled = false;
         return;
     }
-    
+
     // Valid selection
     directionIndicator.style.display = 'flex';
     proceedBtn.disabled = false;
@@ -300,41 +322,41 @@ function swapModels() {
     const sourcePatient = document.getElementById('sourcePatient');
     const sourceDataType = document.getElementById('sourceDataType');
     const sourceModel = document.getElementById('sourceModel');
-    
+
     const targetPatient = document.getElementById('targetPatient');
     const targetDataType = document.getElementById('targetDataType');
     const targetModel = document.getElementById('targetModel');
-    
+
     // Swap patient
     const tempPatient = sourcePatient.value;
     sourcePatient.value = targetPatient.value;
     targetPatient.value = tempPatient;
-    
+
     // Refresh data types
     onSourcePatientChange(sourcePatient.value);
     onTargetPatientChange(targetPatient.value);
-    
+
     // Small delay to let data types populate
     setTimeout(() => {
         // Swap data type
         const tempDataType = sourceDataType.value;
         sourceDataType.value = targetDataType.value;
         targetDataType.value = tempDataType;
-        
+
         // Refresh models
         onSourceDataTypeChange(sourceDataType.value);
         onTargetDataTypeChange(targetDataType.value);
-        
+
         // Small delay to let models populate
         setTimeout(() => {
             // Swap model
             const tempModel = sourceModel.value;
             sourceModel.value = targetModel.value;
             targetModel.value = tempModel;
-            
+
             selectedSource = sourceModel.value ? JSON.parse(sourceModel.value) : null;
             selectedTarget = targetModel.value ? JSON.parse(targetModel.value) : null;
-            
+
             validateSelection();
         }, 50);
     }, 50);
@@ -349,17 +371,19 @@ async function proceedToViewer() {
         const viewerContainer = document.getElementById('viewerContainer');
         const splitViewCont = document.getElementById('splitViewContainer');
         const dicomViewerCont = document.getElementById('dicomViewerContainer');
-        
+        const modelSelectionPanel = document.getElementById('modelSelectionPanel');
+
         if (loadingInd) loadingInd.style.display = 'flex';
         if (selectionView) selectionView.style.display = 'none';
         if (viewerContainer) viewerContainer.style.display = 'none';
         if (splitViewCont) splitViewCont.style.display = 'none';
         if (dicomViewerCont) dicomViewerCont.style.display = 'none';
-        
+        if (modelSelectionPanel) modelSelectionPanel.style.display = 'none';
+
         // Check if source or target is DICOM
         const sourceIsDicom = selectedSource && selectedSource.file_type === 'dcm';
         const targetIsDicom = selectedTarget && selectedTarget.file_type === 'dcm';
-        
+
         // If either is DICOM, use DICOM viewer approach
         if (sourceIsDicom || targetIsDicom) {
             await loadDicomViewer(sourceIsDicom, targetIsDicom);
@@ -367,30 +391,54 @@ async function proceedToViewer() {
             // Both are 3D models, use split view viewer
             await load3DViewer();
         }
-        
+
         console.log('Models loaded successfully!');
-        
+
     } catch (error) {
         console.error('Error loading models:', error);
-        
+
         const loadingInd = document.getElementById('loadingIndicator');
         const selectionView = document.getElementById('selectionView');
-        
+        const modelSelectionPanel = document.getElementById('modelSelectionPanel');
+
         if (loadingInd) loadingInd.style.display = 'none';
         if (selectionView) selectionView.style.display = 'flex';
-        
+        if (modelSelectionPanel) modelSelectionPanel.style.display = 'block';
+
         showValidationMessage('Error loading models: ' + error.message, 'error');
     }
+}
+
+function backToSelection() {
+    const viewerControls = document.getElementById('viewerControlsPanel');
+    const modelSelectionPanel = document.getElementById('modelSelectionPanel');
+    const selectionView = document.getElementById('selectionView');
+    const viewerContainer = document.getElementById('viewerContainer');
+    const splitViewCont = document.getElementById('splitViewContainer');
+    const dicomViewerCont = document.getElementById('dicomViewerContainer');
+
+    // Hide viewer panels
+    if (viewerControls) viewerControls.style.display = 'none';
+    if (viewerContainer) viewerContainer.style.display = 'none';
+    if (splitViewCont) splitViewCont.style.display = 'none';
+    if (dicomViewerCont) dicomViewerCont.style.display = 'none';
+
+    // Show selection panels
+    if (modelSelectionPanel) modelSelectionPanel.style.display = 'block';
+    if (selectionView) selectionView.style.display = 'flex';
+
+    // Reset validation but keep selections
+    validateSelection();
 }
 
 // Setup rotation controls for models
 function setupRotationControls() {
     const rotationAmount = 5; // degrees per click
-    
+
     // Keyboard shortcuts to select model (1 for Source, 2 for Target)
     document.addEventListener('keydown', (e) => {
         if (!registrationViewer) return;
-        
+
         if (e.key === '1') {
             registrationViewer.setSelectedModel('source');
             console.log('Selected Source Model for rotation');
@@ -402,7 +450,7 @@ function setupRotationControls() {
             console.log('Deselected model - Camera mode');
         }
     });
-    
+
     // Source Model Rotation
     document.getElementById('sourceRotateXPos')?.addEventListener('click', () => {
         if (splitViewViewer) splitViewViewer.rotateSourceModel('x', rotationAmount);
@@ -471,42 +519,42 @@ async function load3DViewer() {
         if (!selectedSource || !selectedTarget) {
             throw new Error('Please select both source and target models');
         }
-        
+
         // Check canvas elements exist
         const sourceCanvas = document.getElementById('sourceViewer');
         const targetCanvas = document.getElementById('targetViewer');
-        
+
         if (!sourceCanvas || !targetCanvas) {
             throw new Error('Canvas elements not found in HTML');
         }
-        
+
         // Initialize split view viewer with canvas IDs
         if (!splitViewViewer) {
             splitViewViewer = new SplitViewViewer('sourceViewer', 'targetViewer');
         }
-        
+
         // Construct file URLs
         const sourceUrl = `${API_BASE}/file/${encodeURIComponent(selectedSource.file_path)}`;
         const targetUrl = `${API_BASE}/file/${encodeURIComponent(selectedTarget.file_path)}`;
-        
+
         // Load models into respective viewers
         console.log('Loading source model:', sourceUrl);
         await splitViewViewer.sourceViewer.loadModel(sourceUrl, selectedSource.file_type);
-        
+
         console.log('Loading target model:', targetUrl);
         await splitViewViewer.targetViewer.loadModel(targetUrl, selectedTarget.file_type);
-        
+
         // Hide loading, show split view and controls
         const loadingInd = document.getElementById('loadingIndicator');
         const viewerCtrls = document.getElementById('viewerControlsPanel');
-        
+
         if (loadingInd) loadingInd.style.display = 'none';
         document.getElementById('splitViewContainer').style.display = 'flex';
         if (viewerCtrls) viewerCtrls.style.display = 'block';
-        
+
         // Trigger resize to ensure canvases are properly sized
         window.dispatchEvent(new Event('resize'));
-        
+
         console.log('3D viewers loaded successfully');
     } catch (error) {
         console.error('Error in load3DViewer:', error);
@@ -527,37 +575,37 @@ async function loadDicomViewer(sourceIsDicom, targetIsDicom) {
             await dicomViewer.init();
             setupDicomControls();
         }
-        
+
         // For now, load the first available DICOM series (prefer source if available)
         const dicomModel = sourceIsDicom ? selectedSource : selectedTarget;
-        
+
         // Get DICOM series
         const response = await fetch(`${API_BASE}/cbct-series/${dicomModel.patient_id}`);
         const data = await response.json();
-        
+
         if (!data.series || data.series.length === 0) {
             throw new Error('No DICOM files found');
         }
-        
+
         // Load first series
         const series = data.series[0];
         await dicomViewer.loadDicomSeries(series.files);
-        
+
         // Hide loading, show DICOM viewer
         const loadingInd = document.getElementById('loadingIndicator');
         const dicomCont = document.getElementById('dicomViewerContainer');
         const viewerCtrls = document.getElementById('viewerControlsPanel');
-        
+
         if (loadingInd) loadingInd.style.display = 'none';
         if (dicomCont) dicomCont.style.display = 'flex';
         if (viewerCtrls) viewerCtrls.style.display = 'none';
-        
+
         // Update slider max value
         const slider = document.getElementById('dicomSliceSlider');
         if (slider) {
             slider.max = series.files.length - 1;
         }
-        
+
         // Trigger resize
         window.dispatchEvent(new Event('resize'));
     } catch (error) {
@@ -571,12 +619,12 @@ function setupDicomControls() {
     const prevBtn = document.getElementById('dicomPrevBtn');
     const nextBtn = document.getElementById('dicomNextBtn');
     const slider = document.getElementById('dicomSliceSlider');
-    
+
     if (!prevBtn || !nextBtn || !slider) {
         console.warn('DICOM control elements not found');
         return;
     }
-    
+
     prevBtn.addEventListener('click', () => {
         if (dicomViewer) {
             const index = dicomViewer.getCurrentIndex();
@@ -586,7 +634,7 @@ function setupDicomControls() {
             }
         }
     });
-    
+
     nextBtn.addEventListener('click', () => {
         if (dicomViewer) {
             const index = dicomViewer.getCurrentIndex();
@@ -596,7 +644,7 @@ function setupDicomControls() {
             }
         }
     });
-    
+
     slider.addEventListener('input', (e) => {
         if (dicomViewer) {
             dicomViewer.goToSlice(parseInt(e.target.value));
@@ -604,5 +652,351 @@ function setupDicomControls() {
     });
 }
 
+// Manual Registration state
+const manualState = {
+    sourcePoints: [],
+    targetPoints: [],
+    sourceMarkers: [],
+    targetMarkers: [],
+    previewApplied: false,
+    originalSourceMatrix: null,
+    transform: null
+};
+
+// Event handlers for manual registration UI
+function setupManualRegistrationUI() {
+    const manualRegBtn = document.getElementById('manualRegBtn');
+    const manualModal = document.getElementById('manualRegModal');
+    const closeManual = document.getElementById('closeManualModalBtn');
+    const enterPickModeBtn = document.getElementById('enterPickModeBtn');
+    const clearPointsBtn = document.getElementById('clearPointsBtn');
+    const computeTransformBtn = document.getElementById('computeTransformBtn');
+    const previewTransformBtn = document.getElementById('previewTransformBtn');
+    const acceptTransformBtn = document.getElementById('acceptTransformBtn');
+
+    manualRegBtn.addEventListener('click', () => {
+        manualModal.style.display = 'block';
+    });
+
+    closeManual.addEventListener('click', () => {
+        manualModal.style.display = 'none';
+        exitPickMode();
+    });
+
+    clearPointsBtn.addEventListener('click', () => {
+        clearManualPoints();
+    });
+
+    enterPickModeBtn.addEventListener('click', () => {
+        togglePickMode();
+    });
+
+    // UX Improvement: Wire up the finish pick button in the overlay
+    const finishPickBtn = document.getElementById('finishPickBtn');
+    if (finishPickBtn) {
+        finishPickBtn.addEventListener('click', () => {
+            // Exit pick mode -> This will effectively "Finish Picking"
+            togglePickMode();
+        });
+    }
+
+    // Undo button
+    const undoPickBtn = document.getElementById('undoPickBtn');
+    if (undoPickBtn) {
+        undoPickBtn.addEventListener('click', undoLastPoint);
+    }
+
+    computeTransformBtn.addEventListener('click', async () => {
+        if (manualState.sourcePoints.length !== manualState.targetPoints.length || manualState.sourcePoints.length !== 4) {
+            alert('Please pick exactly 4 point pairs for manual registration');
+            return;
+        }
+
+        // Call backend to compute transform
+        try {
+            const resp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/manual`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source_points: manualState.sourcePoints, target_points: manualState.targetPoints })
+            });
+            const result = await resp.json();
+            if (!resp.ok) throw new Error(result.error || 'Compute failed');
+
+            manualState.transform = result;
+            document.getElementById('computeTransformBtn').disabled = true;
+            document.getElementById('previewTransformBtn').disabled = false;
+            document.getElementById('acceptTransformBtn').disabled = false;
+
+            showValidationMessage(`Computed transform: RMSE=${result.rmse.toFixed(3)}`, 'success');
+        } catch (err) {
+            console.error('Error computing transform:', err);
+            showValidationMessage('Error computing transform: ' + err.message, 'error');
+        }
+    });
+
+    previewTransformBtn.addEventListener('click', () => {
+        if (!manualState.transform || !splitViewViewer || !splitViewViewer.sourceViewer) return;
+
+        // Apply preview transform to source mesh
+        const mesh = splitViewViewer.sourceViewer.mesh;
+        if (!mesh) return;
+
+        if (!manualState.previewApplied) {
+            manualState.originalSourceMatrix = mesh.matrix.clone();
+
+            const R = manualState.transform.rotation;
+            const t = manualState.transform.translation;
+
+            const m = new THREE.Matrix4();
+            m.set(
+                R[0][0], R[0][1], R[0][2], t[0],
+                R[1][0], R[1][1], R[1][2], t[1],
+                R[2][0], R[2][1], R[2][2], t[2],
+                0, 0, 0, 1
+            );
+
+            mesh.applyMatrix4(m);
+            mesh.updateMatrixWorld(true);
+            manualState.previewApplied = true;
+            showValidationMessage('Preview applied. Accept to save or Re-preview to revert.', 'info');
+        } else {
+            // revert preview
+            mesh.matrix.copy(manualState.originalSourceMatrix);
+            mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
+            mesh.updateMatrixWorld(true);
+            manualState.previewApplied = false;
+            showValidationMessage('Preview reverted', 'info');
+        }
+    });
+
+    acceptTransformBtn.addEventListener('click', async () => {
+        if (!manualState.transform) return;
+
+        try {
+            const resp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/apply`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source_path: selectedSource.file_path, rotation: manualState.transform.rotation, translation: manualState.transform.translation })
+            });
+            const result = await resp.json();
+            if (!resp.ok) throw new Error(result.error || 'Save failed');
+
+            showValidationMessage('Registration applied and saved: ' + result.file_path, 'success');
+            document.getElementById('manualRegModal').style.display = 'none';
+            exitPickMode();
+        } catch (err) {
+            console.error('Error applying transform:', err);
+            showValidationMessage('Error saving transform: ' + err.message, 'error');
+        }
+    });
+}
+
+function togglePickMode() {
+    if (!splitViewViewer) return;
+    const enterBtn = document.getElementById('enterPickModeBtn');
+    const manualModal = document.getElementById('manualRegModal');
+    const pickModeOverlay = document.getElementById('pickModeOverlay');
+
+    const isActive = enterBtn.classList.toggle('active');
+    const enabling = isActive;
+
+    splitViewViewer.sourceViewer.setPickMode(enabling);
+    splitViewViewer.targetViewer.setPickMode(enabling);
+
+    if (enabling) {
+        splitViewViewer.sourceViewer.setOnPointPick((pt) => onPointPicked('source', pt));
+        splitViewViewer.targetViewer.setOnPointPick((pt) => onPointPicked('target', pt));
+
+        // UX Improvement: Hide blocking modal, show non-blocking overlay
+        if (manualModal) manualModal.style.display = 'none';
+        if (pickModeOverlay) {
+            pickModeOverlay.style.display = 'flex';
+            updatePickOverlayCounts();
+        }
+
+        showValidationMessage('Pick mode enabled: Click on Source or Target to pick points', 'info');
+        document.getElementById('enterPickModeBtn').textContent = 'Exit Pick Mode';
+    } else {
+        exitPickMode();
+    }
+}
+
+function exitPickMode() {
+    const enterBtn = document.getElementById('enterPickModeBtn');
+    const manualModal = document.getElementById('manualRegModal');
+    const pickModeOverlay = document.getElementById('pickModeOverlay');
+
+    enterBtn.classList.remove('active');
+    enterBtn.textContent = 'Enter Pick Mode';
+
+    if (splitViewViewer) {
+        splitViewViewer.sourceViewer.setPickMode(false);
+        splitViewViewer.targetViewer.setPickMode(false);
+        splitViewViewer.sourceViewer.setOnPointPick(null);
+        splitViewViewer.targetViewer.setOnPointPick(null);
+    }
+
+    // Restore modal, hide overlay
+    if (pickModeOverlay) pickModeOverlay.style.display = 'none';
+
+    // Only show modal if we are actually in the flow (checking visibility of other elements or assuming yes)
+    // Ideally we only show it if it was open. Since exitPickMode is called by 'Close' too, we need to be careful.
+    // If called from "Finish Picking", we want to show modal.
+    // If called from "Close", we are closing everything.
+    // However, exitPickMode doesn't know the context directly. 
+    // BUT: togglePickMode (disabling) implies user clicked "Finish/Exit" or button.
+    // Let's assume we want to show the modal if we are exiting pick mode explicitly.
+    // If the modal was closed via "Close", manualModal.style.display is already none.
+
+    // Simple logic: If we are exiting pick mode (and not just cleaning up), we probably want to see the modal again to compute.
+    if (manualModal && manualModal.style.display === 'none' && enterBtn.offsetParent !== null) {
+        // Check if we originated from the modal logic.
+        // Let's just forcefully show it if we are toggling off.
+        manualModal.style.display = 'block';
+    }
+
+    showValidationMessage('Pick mode disabled', 'info');
+}
+
+function undoLastPoint() {
+    // Undo logic: We need to know which side was picked last? 
+    // Or just check lengths. If equal, maybe undo target (assuming source then target pattern)?
+    // But user can pick in any order.
+    // Ideally we should track a history stack.
+
+    // For now, let's just try to be smart or simple.
+    // Simple approach: Check lists. If we have more target points or equal, remove last target.
+    // If we have more source points, remove last source.
+    // This assumes user roughly alternates or finishes one side.
+
+    const sLen = manualState.sourcePoints.length;
+    const tLen = manualState.targetPoints.length;
+
+    if (sLen === 0 && tLen === 0) return;
+
+    let sideToRemove = null;
+
+    // Heuristic: Remove the one that was likely added last.
+    // We can rely on timestamp? No timestamps stored safely.
+    // Let's rely on standard workflow: Source -> Target -> Source -> Target.
+    // If lengths are equal (e.g. 1 and 1), last one was probably Target.
+    // If Source > Target (e.g. 2 and 1), last one was Source.
+    // If Target > Source (e.g. 1 and 2), last one was Target.
+
+    if (tLen >= sLen && tLen > 0) {
+        sideToRemove = 'target';
+    } else {
+        sideToRemove = 'source';
+    }
+
+    if (sideToRemove === 'source') {
+        manualState.sourcePoints.pop();
+        const marker = manualState.sourceMarkers.pop();
+        if (marker && splitViewViewer && splitViewViewer.sourceViewer) {
+            splitViewViewer.sourceViewer.scene.remove(marker);
+        }
+
+        const list = document.getElementById('sourcePointsList');
+        if (list.lastElementChild) list.removeChild(list.lastElementChild);
+
+        showValidationMessage('Undid last Source point', 'info');
+    } else {
+        manualState.targetPoints.pop();
+        const marker = manualState.targetMarkers.pop();
+        if (marker && splitViewViewer && splitViewViewer.targetViewer) {
+            splitViewViewer.targetViewer.scene.remove(marker);
+        }
+
+        const list = document.getElementById('targetPointsList');
+        if (list.lastElementChild) list.removeChild(list.lastElementChild);
+
+        showValidationMessage('Undid last Target point', 'info');
+    }
+
+    updatePickOverlayCounts();
+    document.getElementById('computeTransformBtn').disabled = true;
+}
+
+function updatePickOverlayCounts() {
+    const sCount = document.getElementById('sourcePickCount');
+    const tCount = document.getElementById('targetPickCount');
+    if (sCount) {
+        sCount.textContent = `${manualState.sourcePoints.length}/4`;
+        if (manualState.sourcePoints.length === 4) sCount.classList.add('done');
+        else sCount.classList.remove('done');
+    }
+    if (tCount) {
+        tCount.textContent = `${manualState.targetPoints.length}/4`;
+        if (manualState.targetPoints.length === 4) tCount.classList.add('done');
+        else tCount.classList.remove('done');
+    }
+}
+
+function clearManualPoints() {
+    manualState.sourcePoints = [];
+    manualState.targetPoints = [];
+    manualState.sourceMarkers = [];
+    manualState.targetMarkers = [];
+    manualState.previewApplied = false;
+    manualState.originalSourceMatrix = null;
+    manualState.transform = null;
+
+    document.getElementById('sourcePointsList').innerHTML = '';
+    document.getElementById('targetPointsList').innerHTML = '';
+
+    if (splitViewViewer) {
+        splitViewViewer.sourceViewer.clearMarkers();
+        splitViewViewer.targetViewer.clearMarkers();
+    }
+
+    document.getElementById('computeTransformBtn').disabled = true;
+    document.getElementById('previewTransformBtn').disabled = true;
+    document.getElementById('acceptTransformBtn').disabled = true;
+}
+
+function onPointPicked(side, threePoint) {
+    const arr = [threePoint.x, threePoint.y, threePoint.z];
+
+    if (side === 'source') {
+        if (manualState.sourcePoints.length >= 4) {
+            showValidationMessage('Already picked 4 source points', 'warning');
+            return;
+        }
+        manualState.sourcePoints.push(arr);
+        const li = document.createElement('li');
+        li.textContent = `(${arr.map(v => v.toFixed(3)).join(', ')})`;
+        document.getElementById('sourcePointsList').appendChild(li);
+
+        // Pass index as label (length is already updated)
+        const label = manualState.sourcePoints.length.toString();
+        const marker = splitViewViewer.sourceViewer.addMarker(threePoint, 0xff0000, label);
+        manualState.sourceMarkers.push(marker);
+    } else {
+        if (manualState.targetPoints.length >= 4) {
+            showValidationMessage('Already picked 4 target points', 'warning');
+            return;
+        }
+        manualState.targetPoints.push(arr);
+        const li = document.createElement('li');
+        li.textContent = `(${arr.map(v => v.toFixed(3)).join(', ')})`;
+        document.getElementById('targetPointsList').appendChild(li);
+
+        // Pass index as label
+        const label = manualState.targetPoints.length.toString();
+        const marker = splitViewViewer.targetViewer.addMarker(threePoint, 0x00ff00, label);
+        manualState.targetMarkers.push(marker);
+    }
+
+    // Enable compute when we have exactly 4 pairs
+    if (manualState.sourcePoints.length === 4 && manualState.targetPoints.length === 4) {
+        document.getElementById('computeTransformBtn').disabled = false;
+        // Optional: Auto-exit pick mode?
+        // togglePickMode(); 
+    }
+
+    // Update overlay counts
+    updatePickOverlayCounts();
+}
+
 // Initialize when page loads
-window.addEventListener('DOMContentLoaded', initRegistration);
+window.addEventListener('DOMContentLoaded', () => { initRegistration(); setupManualRegistrationUI(); });

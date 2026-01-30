@@ -2,6 +2,9 @@ from flask import Flask, jsonify, send_file, send_from_directory, request
 from flask_cors import CORS
 import os
 import json
+import numpy as np
+import trimesh
+from urllib.parse import quote
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)  # Enable CORS for all routes
@@ -146,8 +149,107 @@ def get_cbct_series(patient_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# Registration: compute rigid transform from paired landmarks (Kabsch)
+@app.route('/api/patient/<patient_id>/register/manual', methods=['POST'])
+def api_compute_manual_registration(patient_id):
+    try:
+        data = request.get_json()
+        source_points = data.get('source_points')
+        target_points = data.get('target_points')
+
+        if not source_points or not target_points:
+            return jsonify({"error": "Missing points"}), 400
+
+        if len(source_points) != len(target_points):
+            return jsonify({"error": "Source and Target must have same number of points"}), 400
+
+        if len(source_points) < 3:
+            return jsonify({"error": "At least 3 points are required"}), 400
+
+        # Convert to numpy arrays
+        src = np.array(source_points, dtype=float)
+        dst = np.array(target_points, dtype=float)
+
+        # Compute centroids
+        centroid_src = src.mean(axis=0)
+        centroid_dst = dst.mean(axis=0)
+
+        src_centered = src - centroid_src
+        dst_centered = dst - centroid_dst
+
+        # Covariance
+        H = src_centered.T @ dst_centered
+
+        # SVD
+        U, S, Vt = np.linalg.svd(H)
+        R = Vt.T @ U.T
+
+        # Reflection correction
+        if np.linalg.det(R) < 0:
+            Vt[-1, :] *= -1
+            R = Vt.T @ U.T
+
+        t = centroid_dst - R @ centroid_src
+
+        # Compute RMSE
+        src_transformed = (R @ src.T).T + t
+        rmse = float(np.sqrt(np.mean(np.sum((src_transformed - dst) ** 2, axis=1))))
+
+        return jsonify({
+            "rotation": R.tolist(),
+            "translation": t.tolist(),
+            "rmse": rmse
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/patient/<patient_id>/register/apply', methods=['POST'])
+def api_apply_registration(patient_id):
+    try:
+        data = request.get_json()
+        source_path = data.get('source_path')
+        rotation = data.get('rotation')
+        translation = data.get('translation')
+
+        if not source_path or not rotation or not translation:
+            return jsonify({"error": "Missing source_path, rotation, or translation"}), 400
+
+        # Resolve full source path
+        full_source = os.path.join(ROOT_FOLDER, source_path)
+        if not os.path.exists(full_source):
+            return jsonify({"error": "Source file not found"}), 404
+
+        mesh = trimesh.load(full_source, process=False)
+
+        # Build 4x4 transform
+        M = np.eye(4)
+        M[:3, :3] = np.array(rotation, dtype=float)
+        M[:3, 3] = np.array(translation, dtype=float)
+
+        mesh.apply_transform(M)
+
+        # Save to processed folder
+        out_dir = os.path.join(ROOT_FOLDER, 'processed', patient_id)
+        os.makedirs(out_dir, exist_ok=True)
+
+        base = os.path.basename(source_path)
+        name, ext = os.path.splitext(base)
+        out_name = f"registered_{name}.ply"
+        out_path = os.path.join(out_dir, out_name)
+
+        mesh.export(out_path)
+
+        rel_path = os.path.relpath(out_path, ROOT_FOLDER)
+        url_path = f"/api/file/{quote(rel_path)}"
+
+        return jsonify({"file_path": rel_path, "file_url": url_path})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     print(f"Starting Flask server...")
     print(f"Root folder: {ROOT_FOLDER}")
-    app.run(debug=True, port=5000)
+    app.run(debug=False, port=5000, use_reloader=False)
 

@@ -538,3 +538,66 @@
         font-size: 0.875rem;
     }
 }
+
+/* ===== Pick Mode Overlay ===== */
+#pickModeOverlay {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(20, 20, 30, 0.95);
+    padding: 12px 24px;
+    border-radius: 50px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    z-index: 2000;
+    border: 1px solid rgba(102, 126, 234, 0.5);
+    backdrop-filter: blur(8px);
+    transition: all 0.3s ease;
+}
+
+#pickModeOverlay .pick-status {
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 500;
+    display: flex;
+    gap: 15px;
+}
+
+#pickModeOverlay .pick-status span {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+#pickModeOverlay .pick-count {
+    background: rgba(102, 126, 234, 0.2);
+    padding: 2px 8px;
+    border-radius: 12px;
+    color: #667eea;
+    font-weight: 700;
+}
+
+#pickModeOverlay .pick-count.done {
+    background: rgba(76, 175, 80, 0.2);
+    color: #4caf50;
+}
+
+#pickModeOverlay .btn-finish {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    transition: all 0.2s ease;
+}
+
+#pickModeOverlay .btn-finish:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+}

@@ -5,7 +5,7 @@ class SplitViewViewer {
         this.targetCanvasId = targetCanvasId;
         this.sourceViewer = null;
         this.targetViewer = null;
-        
+
         // Initialize viewers with provided canvas IDs
         try {
             this.sourceViewer = new IndependentModelViewer(sourceCanvasId, 'Source');
@@ -22,7 +22,7 @@ class SplitViewViewer {
 
             // Load source model
             await this.sourceViewer.loadModel(sourceUrl, sourceType);
-            
+
             // Load target model
             await this.targetViewer.loadModel(targetUrl, targetType);
 
@@ -88,14 +88,23 @@ class IndependentModelViewer {
         this.renderer = null;
         this.controls = null;
         this.mesh = null;
-        
+
         // Mouse interaction
         this.raycaster = new THREE.Raycaster();
         this.mouse = new THREE.Vector2();
         this.isDragging = false;
         this.previousMousePosition = { x: 0, y: 0 };
         this.rotationSpeed = 0.01;
-        
+
+        // Picking/markers
+        this.pickMode = false;
+        this.onPointPick = null;
+        this.modelCenter = null;
+        this.modelScale = null;
+        this.markers = [];
+        this.mouseDownTime = 0;
+        this.mouseDownPos = { x: 0, y: 0 };
+
         this.cameraPresets = {
             isometric: { pos: [5, 5, 5], target: [0, 0, 0] },
             front: { pos: [0, 0, 8], target: [0, 0, 0] },
@@ -163,9 +172,14 @@ class IndependentModelViewer {
         this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
         this.canvas.addEventListener('mouseup', (e) => this.onMouseUp(e));
         this.canvas.addEventListener('mouseleave', (e) => this.onMouseLeave(e));
+        this.canvas.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     }
 
     onMouseDown(event) {
+        // Track mouse down for click vs drag detection
+        this.mouseDownTime = Date.now();
+        this.mouseDownPos = { x: event.clientX, y: event.clientY };
+
         // Calculate mouse position relative to this canvas
         const rect = this.canvas.getBoundingClientRect();
         this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -177,12 +191,20 @@ class IndependentModelViewer {
             const intersects = this.raycaster.intersectObject(this.mesh);
 
             if (intersects.length > 0) {
+                // Determine if we start dragging
+                // If pick mode is enabled, we still allow drag (orbit) but we also track for click
+                // But typically orbit starts on background too. 
+                // We'll let OrbitControls handle camera. We handle visual highlight.
+
                 this.isDragging = true;
                 this.previousMousePosition = { x: event.clientX, y: event.clientY };
-                
-                // Disable camera controls when dragging model
-                this.controls.enabled = false;
-                
+
+                // Disable camera controls when dragging model (only if NOT in pick mode)
+                // If in pick mode, we want to allow rotating the camera to find points!
+                if (!this.pickMode) {
+                    this.controls.enabled = false;
+                }
+
                 // Visual feedback
                 if (this.mesh.material) {
                     this.mesh.material.emissive.setHex(0x334455);
@@ -205,21 +227,62 @@ class IndependentModelViewer {
     }
 
     onMouseUp(event) {
+        // Check for click (short duration, small movement)
+        const clickDuration = Date.now() - this.mouseDownTime;
+        const moveDist = Math.hypot(event.clientX - this.mouseDownPos.x, event.clientY - this.mouseDownPos.y);
+
+        // Relaxed thresholds: 1000ms and 20px - VERY forgiving
+        if (this.pickMode && clickDuration < 1000 && moveDist < 20) {
+            // It's a click in pick mode! Try to pick.
+            this.handlePick(event);
+        }
+
         this.isDragging = false;
-        
+
         // Re-enable camera controls
         this.controls.enabled = true;
-        
+
         // Remove highlight
         if (this.mesh && this.mesh.material) {
             this.mesh.material.emissive.setHex(0x000000);
         }
     }
 
+    handlePick(event) {
+        if (!this.mesh || !this.onPointPick) return;
+
+        const rect = this.canvas.getBoundingClientRect();
+        this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+        this.raycaster.setFromCamera(this.mouse, this.camera);
+        const intersects = this.raycaster.intersectObject(this.mesh);
+
+        if (intersects.length > 0) {
+            const hitPoint = intersects[0].point.clone();
+
+            // Convert display hit point back to original model coordinates
+            if (this.modelScale && this.modelCenter) {
+                const originalPoint = hitPoint.clone().divideScalar(this.modelScale).add(this.modelCenter);
+                this.onPointPick(originalPoint);
+            } else {
+                this.onPointPick(hitPoint);
+            }
+        } else {
+            console.warn("Pick Click detected but no intersection found.");
+        }
+    }
+
+    onDoubleClick(event) {
+        if (this.pickMode) {
+            this.handlePick(event);
+        }
+    }
+
     onMouseLeave(event) {
         this.isDragging = false;
         this.controls.enabled = true;
-        
+
         if (this.mesh && this.mesh.material) {
             this.mesh.material.emissive.setHex(0x000000);
         }
@@ -240,6 +303,20 @@ class IndependentModelViewer {
                     loader.load(url, resolve, undefined, reject);
                 });
             }
+
+            // Compute original center and scale BEFORE we modify geometry so we can map picks back to original coordinates
+            geometry.computeBoundingBox();
+            const _box = geometry.boundingBox;
+            const _center = new THREE.Vector3();
+            _box.getCenter(_center);
+            const _size = new THREE.Vector3();
+            _box.getSize(_size);
+            const _maxDim = Math.max(_size.x, _size.y, _size.z) || 1;
+            const _scale = 3 / _maxDim;
+
+            // Store mapping info for later (used to map display points back to original model coordinates)
+            this.modelCenter = _center.clone();
+            this.modelScale = _scale;
 
             geometry.computeVertexNormals();
 
@@ -319,11 +396,113 @@ class IndependentModelViewer {
         this.controls.update();
     }
 
+    // Markers for picked points
+    addMarker(worldPosition, color = 0xff0000, label = null) {
+        if (!this.scene) return null;
+
+        // Convert world (original model) position to displayed coordinates
+        let displayPos = worldPosition.clone();
+        if (this.modelCenter && this.modelScale) {
+            displayPos.sub(this.modelCenter).multiplyScalar(this.modelScale);
+        }
+
+        const geometry = new THREE.SphereGeometry(0.04, 16, 16);
+        const material = new THREE.MeshBasicMaterial({
+            color: color,
+            depthTest: false, // Always show on top
+            transparent: true
+        });
+        const marker = new THREE.Mesh(geometry, material);
+        marker.position.copy(displayPos);
+        marker.renderOrder = 999; // Render last
+
+        this.scene.add(marker);
+
+        // Add label if provided
+        if (label) {
+            const sprite = this.createTextSprite(label);
+            if (sprite) {
+                sprite.position.set(0, 0.1, 0); // Offset above the point
+                marker.add(sprite); // Attach to marker so it moves with it
+            }
+        }
+
+        this.markers.push(marker);
+        return marker;
+    }
+
+    createTextSprite(message) {
+        const fontface = "Arial";
+        const fontsize = 24;
+        const borderThickness = 2;
+
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = 128; // Power of 2
+        canvas.height = 64;
+
+        context.font = "bold " + fontsize + "px " + fontface;
+
+        // Background
+        context.fillStyle = "rgba(0, 0, 0, 0.7)";
+        context.strokeStyle = "rgba(255, 255, 255, 0.8)";
+        context.lineWidth = borderThickness;
+
+        // Measure text
+        const metrics = context.measureText(message);
+        const textWidth = metrics.width;
+
+        // Draw background rounded rect
+        this.roundRect(context, 64 - textWidth / 2 - 10, 32 - fontsize / 2 - 5, textWidth + 20, fontsize + 10, 6);
+
+        // Text
+        context.fillStyle = "rgba(255, 255, 255, 1.0)";
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(message, 64, 32);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const spriteMaterial = new THREE.SpriteMaterial({
+            map: texture,
+            depthTest: false, // Always show on top
+            transparent: true
+        });
+        const sprite = new THREE.Sprite(spriteMaterial);
+        sprite.renderOrder = 1000; // Render on top of marker
+        sprite.scale.set(0.4, 0.2, 1.0); // Slightly larger
+        return sprite;
+    }
+
+    roundRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+    }
+
+    clearMarkers() {
+        for (const m of this.markers) {
+            this.scene.remove(m);
+            if (m.geometry) m.geometry.dispose();
+            if (m.material) m.material.dispose();
+        }
+        this.markers = [];
+    }
+
     rotateModel(axis, amount) {
         if (!this.mesh) return;
-        
+
         const rotation = amount * Math.PI / 180;
-        
+
         if (axis === 'x') this.mesh.rotation.x += rotation;
         else if (axis === 'y') this.mesh.rotation.y += rotation;
         else if (axis === 'z') this.mesh.rotation.z += rotation;
@@ -339,6 +518,17 @@ class IndependentModelViewer {
         if (this.mesh) {
             this.mesh.visible = visible;
         }
+    }
+
+    setPickMode(enabled) {
+        this.pickMode = !!enabled;
+        if (this.canvas) {
+            this.canvas.style.cursor = this.pickMode ? 'crosshair' : 'default';
+        }
+    }
+
+    setOnPointPick(cb) {
+        this.onPointPick = cb;
     }
 
     setOpacity(opacity) {

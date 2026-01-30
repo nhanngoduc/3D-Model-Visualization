@@ -37,24 +37,24 @@
             <!-- Sidebar -->
             <aside class="sidebar">
                 <!-- REG-01: Model Selection Panel -->
-                <div class="sidebar-section">
+                <div id="modelSelectionPanel" class="sidebar-section">
                     <h2 class="section-title">Model Selection</h2>
-                    
+
                     <!-- Source Model -->
                     <div class="model-selector">
                         <label class="selector-label">Source Model (Movable)</label>
                         <small class="selector-hint">Will be aligned to target</small>
-                        
+
                         <label for="sourcePatient" class="mini-label">Patient</label>
                         <select id="sourcePatient" class="custom-select">
                             <option value="">-- Select Patient --</option>
                         </select>
-                        
+
                         <label for="sourceDataType" class="mini-label">Data Type</label>
                         <select id="sourceDataType" class="custom-select" disabled>
                             <option value="">-- Select Data Type --</option>
                         </select>
-                        
+
                         <label for="sourceModel" class="mini-label">Model</label>
                         <select id="sourceModel" class="custom-select" disabled>
                             <option value="">-- Select Model --</option>
@@ -71,17 +71,17 @@
                     <div class="model-selector">
                         <label class="selector-label">Target Model (Fixed)</label>
                         <small class="selector-hint">Reference (will not move)</small>
-                        
+
                         <label for="targetPatient" class="mini-label">Patient</label>
                         <select id="targetPatient" class="custom-select">
                             <option value="">-- Select Patient --</option>
                         </select>
-                        
+
                         <label for="targetDataType" class="mini-label">Data Type</label>
                         <select id="targetDataType" class="custom-select" disabled>
                             <option value="">-- Select Data Type --</option>
                         </select>
-                        
+
                         <label for="targetModel" class="mini-label">Model</label>
                         <select id="targetModel" class="custom-select" disabled>
                             <option value="">-- Select Model --</option>
@@ -100,13 +100,17 @@
 
                     <!-- Next Button -->
                     <button id="proceedBtn" class="btn btn-primary" disabled>
-                        Proceed to Overlay Viewer →
+                        Load Models & Register →
                     </button>
                 </div>
 
                 <!-- REG-02: Viewer Controls Panel -->
                 <div id="viewerControlsPanel" class="sidebar-section" style="display: none;">
-                    <h2 class="section-title">Viewer Controls</h2>
+                    <div
+                        style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                        <h2 class="section-title" style="margin-bottom: 0;">Viewer Controls</h2>
+                        <button id="backToSelectionBtn" class="btn btn-small" title="Back to Selection">← Back</button>
+                    </div>
 
                     <!-- Visibility Toggles -->
                     <div class="control-group">
@@ -142,7 +146,7 @@
                     <!-- Model Rotation Controls -->
                     <div class="control-group rotation-controls">
                         <h3 class="control-subtitle">Model Rotation</h3>
-                        
+
                         <!-- Source Rotation -->
                         <div class="rotation-model-group">
                             <label class="rotation-label">Source Model</label>
@@ -184,6 +188,11 @@
                         </select>
                     </div>
 
+                    <!-- Manual Registration -->
+                    <button id="manualRegBtn" class="btn btn-secondary">
+                        Manual Registration (4-point)
+                    </button>
+
                     <!-- Next Step -->
                     <button id="continueRegBtn" class="btn btn-primary">
                         Continue to Registration →
@@ -198,17 +207,20 @@
                     <div class="selection-content">
                         <div class="selection-icon">📋</div>
                         <h2>Select and Register Models</h2>
-                        <p>Choose Source (movable) and Target (fixed) models from the sidebar, then click "Proceed to Overlay Viewer" to see them together</p>
+                        <p>Choose Source (movable) and Target (fixed) models from the sidebar, then click "Proceed to
+                            Overlay Viewer" to see them together</p>
                     </div>
                 </div>
 
                 <!-- 3D Overlay Viewer Container (Full Registration) -->
-                <div id="viewerContainer" class="viewer-container" style="display: none; width: 100%; height: 100%; position: relative;">
+                <div id="viewerContainer" class="viewer-container"
+                    style="display: none; width: 100%; height: 100%; position: relative;">
                     <canvas id="registrationViewer" style="display: block; width: 100%; height: 100%;"></canvas>
                 </div>
 
                 <!-- Split View Viewer (Source and Target side-by-side) -->
-                <div id="splitViewContainer" class="split-view-container" style="display: none; width: 100%; height: 100%;">
+                <div id="splitViewContainer" class="split-view-container"
+                    style="display: none; width: 100%; height: 100%;">
                     <div class="split-view-panel">
                         <div class="panel-header">Source Model</div>
                         <canvas id="sourceViewer" class="split-view-canvas"></canvas>
@@ -220,13 +232,43 @@
                     </div>
                 </div>
 
+                <!-- Manual Registration Modal -->
+                <div id="manualRegModal" class="modal"
+                    style="display:none; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 1000; background: rgba(20,20,30,0.98); padding: 16px; border-radius: 8px; width: 480px; max-width: 90%; box-shadow: 0 6px 24px rgba(0,0,0,0.6); color: #fff;">
+                    <h3 style="margin-top:0;">Manual Registration (4-point)</h3>
+                    <p style="font-size:0.9rem; color:#ccc;">Pick exactly 4 matching landmark pairs on Source and
+                        Target. Use the "Pick Point" button then click on the model.</p>
+                    <div style="display:flex; gap:12px;">
+                        <div style="flex:1;">
+                            <h4 style="margin:4px 0">Source Points</h4>
+                            <ol id="sourcePointsList"
+                                style="max-height:160px; overflow:auto; padding-left:18px; color:#fff"></ol>
+                        </div>
+                        <div style="flex:1;">
+                            <h4 style="margin:4px 0">Target Points</h4>
+                            <ol id="targetPointsList"
+                                style="max-height:160px; overflow:auto; padding-left:18px; color:#fff"></ol>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:8px; margin-top:12px; justify-content:flex-end;">
+                        <button id="clearPointsBtn" class="btn btn-secondary">Clear</button>
+                        <button id="enterPickModeBtn" class="btn btn-primary">Enter Pick Mode</button>
+                        <button id="computeTransformBtn" class="btn btn-primary" disabled>Compute Transform</button>
+                        <button id="previewTransformBtn" class="btn btn-secondary" disabled>Preview</button>
+                        <button id="acceptTransformBtn" class="btn btn-success" disabled>Accept</button>
+                        <button id="closeManualModalBtn" class="btn btn-small">Close</button>
+                    </div>
+                </div>
+
                 <!-- DICOM 2D Viewer Container -->
-                <div id="dicomViewerContainer" class="dicom-viewer-container" style="display: none; width: 100%; height: 100%; position: relative; flex-direction: column;">
+                <div id="dicomViewerContainer" class="dicom-viewer-container"
+                    style="display: none; width: 100%; height: 100%; position: relative; flex-direction: column;">
                     <div class="dicom-controls">
                         <button id="dicomPrevBtn" class="btn btn-small">← Previous</button>
                         <span id="dicomSliceInfo" class="dicom-info">Loading...</span>
                         <button id="dicomNextBtn" class="btn btn-small">Next →</button>
-                        <input type="range" id="dicomSliceSlider" min="0" max="100" value="0" class="dicom-slider" style="flex: 1; margin: 0 10px;">
+                        <input type="range" id="dicomSliceSlider" min="0" max="100" value="0" class="dicom-slider"
+                            style="flex: 1; margin: 0 10px;">
                     </div>
                     <canvas id="dicomViewer" style="flex: 1; background: #1a1a2e;"></canvas>
                 </div>
@@ -235,6 +277,20 @@
                 <div id="loadingIndicator" class="loading-indicator" style="display: none;">
                     <div class="spinner"></div>
                     <p>Loading models...</p>
+                </div>
+
+                <!-- REG-01.4: UX Improvement - Non-blocking Pick Mode Overlay -->
+                <div id="pickModeOverlay" style="display: none;">
+                    <div class="pick-status">
+                        <span>Source: <span id="sourcePickCount" class="pick-count">0/4</span></span>
+                        <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.2);"></div>
+                        <span>Target: <span id="targetPickCount" class="pick-count">0/4</span></span>
+                    </div>
+                    <div style="display:flex; gap:10px;">
+                        <button id="undoPickBtn" class="btn-finish"
+                            style="background: rgba(255, 68, 68, 0.2); border: 1px solid rgba(255, 68, 68, 0.3); color: #ff6666;">Undo</button>
+                        <button id="finishPickBtn" class="btn-finish">Finish Picking</button>
+                    </div>
                 </div>
             </main>
         </div>
@@ -245,7 +301,7 @@
     <script src="../js/PLYLoader.js"></script>
     <script src="../js/STLLoader.js"></script>
     <script src="../js/OrbitControls.js"></script>
-    
+
     <script src="../js/splitViewViewer.js"></script>
     <script src="../js/dicomViewer2D.js"></script>
     <script src="../js/registration-viewer.js?v=4"></script>
