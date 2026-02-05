@@ -678,6 +678,10 @@ async function load3DViewer() {
         // Trigger resize to ensure canvases are properly sized
         window.dispatchEvent(new Event('resize'));
 
+        // Enable Manual Registration button
+        const manualRegBtn = document.getElementById('manualRegBtn');
+        if (manualRegBtn) manualRegBtn.disabled = false;
+
         console.log('3D viewers loaded successfully');
     } catch (error) {
         console.error('Error in load3DViewer:', error);
@@ -796,6 +800,9 @@ function setupManualRegistrationUI() {
     const computeTransformBtn = document.getElementById('computeTransformBtn');
     const previewTransformBtn = document.getElementById('previewTransformBtn');
     const acceptTransformBtn = document.getElementById('acceptTransformBtn');
+
+    // Disable manual reg button initially
+    if (manualRegBtn) manualRegBtn.disabled = true;
 
     manualRegBtn.addEventListener('click', () => {
         manualModal.style.display = 'block';

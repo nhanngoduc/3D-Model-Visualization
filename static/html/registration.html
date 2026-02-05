@@ -189,7 +189,7 @@
                     </div>
 
                     <!-- Manual Registration -->
-                    <button id="manualRegBtn" class="btn btn-secondary">
+                    <button id="manualRegBtn" class="btn btn-secondary" disabled>
                         Manual Registration (4-point)
                     </button>
 
@@ -208,9 +208,11 @@
                     </div>
 
                     <!-- Result Info -->
-                    <div id="registrationResultInfo" style="background: rgba(76, 175, 80, 0.1); border: 1px solid rgba(76, 175, 80, 0.3); border-radius: 6px; padding: 12px; margin-bottom: 16px; color: #4caf50; font-size: 0.9rem;">
+                    <div id="registrationResultInfo"
+                        style="background: rgba(76, 175, 80, 0.1); border: 1px solid rgba(76, 175, 80, 0.3); border-radius: 6px; padding: 12px; margin-bottom: 16px; color: #4caf50; font-size: 0.9rem;">
                         <strong>✓ Registration Complete</strong>
-                        <p style="margin: 8px 0 0 0; font-size: 0.85rem;">Source model is now aligned with target. You can rotate and inspect the result below.</p>
+                        <p style="margin: 8px 0 0 0; font-size: 0.85rem;">Source model is now aligned with target. You
+                            can rotate and inspect the result below.</p>
                     </div>
 
                     <!-- Visibility Toggles -->
@@ -230,7 +232,8 @@
                         <div class="slider-group">
                             <label for="overlaySourceOpacity">Source Opacity</label>
                             <div class="slider-container">
-                                <input type="range" id="overlaySourceOpacity" min="0" max="100" value="80" class="slider">
+                                <input type="range" id="overlaySourceOpacity" min="0" max="100" value="80"
+                                    class="slider">
                                 <span id="overlaySourceOpacityValue" class="slider-value">80%</span>
                             </div>
                         </div>
@@ -238,7 +241,8 @@
                         <div class="slider-group">
                             <label for="overlayTargetOpacity">Target Opacity</label>
                             <div class="slider-container">
-                                <input type="range" id="overlayTargetOpacity" min="0" max="100" value="60" class="slider">
+                                <input type="range" id="overlayTargetOpacity" min="0" max="100" value="60"
+                                    class="slider">
                                 <span id="overlayTargetOpacityValue" class="slider-value">60%</span>
                             </div>
                         </div>
@@ -296,7 +300,7 @@
                 </div>
 
                 <!-- Manual Registration Modal -->
-                <div id="manualRegModal" class="modal">
+                <div id="manualRegModal" class="modal" style="display: none;">
                     <h3 style="margin-top:0;">Manual Registration (4-point)</h3>
                     <p style="font-size:0.9rem; color:#ccc;">Pick exactly 4 matching landmark pairs on Source and
                         Target. Use the "Enter Pick Mode" button then click on the model.</p>
@@ -304,12 +308,14 @@
                         <div style="flex:1;">
                             <h4 style="margin:4px 0">Source Points</h4>
                             <ol id="sourcePointsList"
-                                style="max-height:160px; overflow:auto; padding-left:18px; color:#fff; margin: 4px 0;"></ol>
+                                style="max-height:160px; overflow:auto; padding-left:18px; color:#fff; margin: 4px 0;">
+                            </ol>
                         </div>
                         <div style="flex:1;">
                             <h4 style="margin:4px 0">Target Points</h4>
                             <ol id="targetPointsList"
-                                style="max-height:160px; overflow:auto; padding-left:18px; color:#fff; margin: 4px 0;"></ol>
+                                style="max-height:160px; overflow:auto; padding-left:18px; color:#fff; margin: 4px 0;">
+                            </ol>
                         </div>
                     </div>
                     <div style="display:flex; gap:8px; margin-top:12px; justify-content:flex-end; flex-wrap: wrap;">
