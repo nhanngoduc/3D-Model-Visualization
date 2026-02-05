@@ -248,6 +248,56 @@ def api_apply_registration(patient_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+@app.route('/api/patient/<string:patient_id>/register/icp', methods=['POST'])
+def register_icp(patient_id):
+    try:
+        data = request.json
+        full_source = os.path.join(ROOT_FOLDER, data.get('source_path', ''))
+        full_target = os.path.join(ROOT_FOLDER, data.get('target_path', ''))
+        init_rot = np.array(data.get('rotation', np.eye(3)))
+        init_trans = np.array(data.get('translation', [0, 0, 0]))
+
+        if not os.path.exists(full_source) or not os.path.exists(full_target):
+            return jsonify({"error": "Source or target file not found"}), 404
+
+        # Load meshes
+        src = trimesh.load(full_source, process=False)
+        dst = trimesh.load(full_target, process=False)
+
+        # Apply initial transform to source
+        init_matrix = np.eye(4)
+        init_matrix[:3, :3] = init_rot
+        init_matrix[:3, 3] = init_trans
+        src.apply_transform(init_matrix)
+
+        # Run ICP
+        # transform: (4, 4) float, homogeneous transformation matrix
+        # cost: float, cost of alignment (RMSE usually)
+        # icp returns (matrix, transformed_source, cost)
+        # We start with identity as we already transformed src
+        matrix, transformed_src, cost = trimesh.registration.icp(
+            src, dst,
+            initial=np.eye(4),
+            threshold=1.0,    # Distance threshold for matching (adjust based on units, e.g. mm)
+            max_iterations=50
+        )
+
+        # Combine transforms: M_total = M_icp * M_init
+        final_matrix = matrix @ init_matrix
+        final_R = final_matrix[:3, :3]
+        final_t = final_matrix[:3, 3]
+
+        return jsonify({
+            "rotation": final_R.tolist(),
+            "translation": final_t.tolist(),
+            "rmse": float(cost),
+            "refinement_matrix": matrix.tolist()
+        })
+    except Exception as e:
+        print(f"ICP Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     print(f"Starting Flask server...")
     print(f"Root folder: {ROOT_FOLDER}")

@@ -431,6 +431,129 @@ function backToSelection() {
     validateSelection();
 }
 
+// Switch to combined overlay view after registration
+async function switchToRegistrationOverlayView() {
+    try {
+        console.log('Switching to registration overlay view...');
+
+        // Hide split view and controls
+        const splitViewCont = document.getElementById('splitViewContainer');
+        const viewerCtrls = document.getElementById('viewerControlsPanel');
+
+        if (splitViewCont) splitViewCont.style.display = 'none';
+        if (viewerCtrls) viewerCtrls.style.display = 'none';
+
+        // Show overlay viewer container and controls
+        const viewerContainer = document.getElementById('viewerContainer');
+        const overlayControls = document.getElementById('overlayControlsPanel');
+
+        if (viewerContainer) viewerContainer.style.display = 'block';
+        if (overlayControls) overlayControls.style.display = 'block';
+
+        // Initialize registration overlay viewer if not already done
+        if (!registrationViewer) {
+            const regCanvas = document.getElementById('registrationViewer');
+            if (!regCanvas) {
+                throw new Error('Registration viewer canvas not found');
+            }
+            registrationViewer = new RegistrationViewer('registrationViewer');
+        }
+
+        // Get the meshes from split viewers
+        if (splitViewViewer && splitViewViewer.sourceViewer && splitViewViewer.targetViewer) {
+            const sourceViewer = splitViewViewer.sourceViewer;
+            const targetViewer = splitViewViewer.targetViewer;
+
+            const sourceMesh = sourceViewer.mesh;
+            const targetMesh = targetViewer.mesh;
+
+            if (sourceMesh && targetMesh) {
+                // CLEAR existing meshes from scene
+                if (registrationViewer.sourceMesh) registrationViewer.scene.remove(registrationViewer.sourceMesh);
+                if (registrationViewer.targetMesh) registrationViewer.scene.remove(registrationViewer.targetMesh);
+
+                // --- CLONE AND RESTORE WORLD COORDINATES ---
+                // The split view meshes have geometry centered at (0,0,0) and are scaled.
+                // We must restore them to their original World Space position/scale for correct alignment.
+                // Formula: P_world = Center + P_local / Scale (If we scaled down)
+                // Actually SplitViewViewer does: 
+                // geometry.translate(-C); scale=S;
+                // So displayed P = (P_orig - C) * S.
+                // To restore P_orig: P_orig = (P/S) + C.
+
+                // TARGET MESH (Reference)
+                // Clone the mesh (shares geometry)
+                const targetClone = targetMesh.clone();
+                // Reset Rotation (crucial, as user might have rotated it)
+                targetClone.rotation.set(0, 0, 0);
+                // Reset Scale (it was scaled by S)
+                targetClone.scale.setScalar(1);
+                // Move Position to C (effectively undoing the geometry translation -C)
+                if (targetViewer.modelCenter) {
+                    targetClone.position.copy(targetViewer.modelCenter);
+                }
+
+                // SOURCE MESH (Transformed)
+                const sourceClone = sourceMesh.clone();
+                sourceClone.rotation.set(0, 0, 0);
+                sourceClone.scale.setScalar(1);
+                if (sourceViewer.modelCenter) {
+                    sourceClone.position.copy(sourceViewer.modelCenter);
+                }
+
+                // Apply Registration Transform to Source
+                if (manualState.transform) {
+                    const R = manualState.transform.rotation;
+                    const t = manualState.transform.translation;
+
+                    const m = new THREE.Matrix4();
+                    m.set(
+                        R[0][0], R[0][1], R[0][2], t[0],
+                        R[1][0], R[1][1], R[1][2], t[1],
+                        R[2][0], R[2][1], R[2][2], t[2],
+                        0, 0, 0, 1
+                    );
+
+                    // Apply matrix. Since the mesh is now effectively at P_world origin but translated by position=C,
+                    // applying matrix M to the object works as: M * Translate(C) * Vertices.
+                    // This correctly transforms the model in World Space.
+                    sourceClone.applyMatrix4(m);
+                }
+
+                // Add to registration viewer scene
+                if (registrationViewer.scene) {
+                    registrationViewer.scene.add(sourceClone);
+                    registrationViewer.scene.add(targetClone);
+
+                    // Update references
+                    registrationViewer.sourceMesh = sourceClone;
+                    registrationViewer.targetMesh = targetClone;
+                    registrationViewer.selectedModel = 'source'; // Default selection
+
+                    // Set visual properties
+                    sourceClone.visible = true;
+                    targetClone.visible = true;
+                    if (sourceClone.material) sourceClone.material.opacity = 0.8;
+                    if (targetClone.material) targetClone.material.opacity = 0.6;
+
+                    // Fit camera to show the restored world-space models
+                    registrationViewer.fitCameraToObjects();
+
+                    console.log('✓ Models restored to world coordinates and aligned');
+                    showValidationMessage('Registration complete! Viewing aligned models.', 'success');
+                }
+            }
+        }
+
+        // Trigger resize
+        window.dispatchEvent(new Event('resize'));
+
+    } catch (error) {
+        console.error('Error switching to overlay view:', error);
+        showValidationMessage('Error switching to overlay view: ' + error.message, 'error');
+    }
+}
+
 // Setup rotation controls for models
 function setupRotationControls() {
     const rotationAmount = 5; // degrees per click
@@ -712,8 +835,14 @@ function setupManualRegistrationUI() {
             return;
         }
 
-        // Call backend to compute transform
         try {
+            // Show loading
+            const computeBtn = document.getElementById('computeTransformBtn');
+            const originalText = computeBtn.textContent;
+            computeBtn.textContent = 'Registering...';
+            computeBtn.disabled = true;
+
+            // Step 1: Compute transform (get R, t)
             const resp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/manual`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -723,70 +852,53 @@ function setupManualRegistrationUI() {
             if (!resp.ok) throw new Error(result.error || 'Compute failed');
 
             manualState.transform = result;
-            document.getElementById('computeTransformBtn').disabled = true;
-            document.getElementById('previewTransformBtn').disabled = false;
-            document.getElementById('acceptTransformBtn').disabled = false;
 
-            showValidationMessage(`Computed transform: RMSE=${result.rmse.toFixed(3)}`, 'success');
-        } catch (err) {
-            console.error('Error computing transform:', err);
-            showValidationMessage('Error computing transform: ' + err.message, 'error');
-        }
-    });
-
-    previewTransformBtn.addEventListener('click', () => {
-        if (!manualState.transform || !splitViewViewer || !splitViewViewer.sourceViewer) return;
-
-        // Apply preview transform to source mesh
-        const mesh = splitViewViewer.sourceViewer.mesh;
-        if (!mesh) return;
-
-        if (!manualState.previewApplied) {
-            manualState.originalSourceMatrix = mesh.matrix.clone();
-
-            const R = manualState.transform.rotation;
-            const t = manualState.transform.translation;
-
-            const m = new THREE.Matrix4();
-            m.set(
-                R[0][0], R[0][1], R[0][2], t[0],
-                R[1][0], R[1][1], R[1][2], t[1],
-                R[2][0], R[2][1], R[2][2], t[2],
-                0, 0, 0, 1
-            );
-
-            mesh.applyMatrix4(m);
-            mesh.updateMatrixWorld(true);
-            manualState.previewApplied = true;
-            showValidationMessage('Preview applied. Accept to save or Re-preview to revert.', 'info');
-        } else {
-            // revert preview
-            mesh.matrix.copy(manualState.originalSourceMatrix);
-            mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
-            mesh.updateMatrixWorld(true);
-            manualState.previewApplied = false;
-            showValidationMessage('Preview reverted', 'info');
-        }
-    });
-
-    acceptTransformBtn.addEventListener('click', async () => {
-        if (!manualState.transform) return;
-
-        try {
-            const resp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/apply`, {
+            // Step 2: Save the registered model to backend
+            // (We do this now so the file exists, but we visualize using the computed matrix)
+            const applyResp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/apply`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ source_path: selectedSource.file_path, rotation: manualState.transform.rotation, translation: manualState.transform.translation })
+                body: JSON.stringify({
+                    source_path: selectedSource.file_path,
+                    rotation: manualState.transform.rotation,
+                    translation: manualState.transform.translation
+                })
             });
-            const result = await resp.json();
-            if (!resp.ok) throw new Error(result.error || 'Save failed');
 
-            showValidationMessage('Registration applied and saved: ' + result.file_path, 'success');
-            document.getElementById('manualRegModal').style.display = 'none';
+            const applyResult = await applyResp.json();
+            if (!applyResp.ok) throw new Error(applyResult.error || 'Save failed');
+
+            console.log('Backend registration successful:', applyResult);
+
+            showValidationMessage(`✓ Registration successful! RMSE=${result.rmse.toFixed(3)}`, 'success');
+
+            // Restore button state
+            computeBtn.textContent = originalText;
+            computeBtn.disabled = true;
+
+            // Close modal and switch to combined overlay view
+            const manualModal = document.getElementById('manualRegModal');
+            if (manualModal) manualModal.style.display = 'none';
             exitPickMode();
+
+            // Switch from split view to combined overlay view
+            try {
+                await switchToRegistrationOverlayView();
+                // Only clear points if switch was successful (or partially so)
+                clearManualPoints();
+            } catch (switchError) {
+                console.error("View switch failed:", switchError);
+                showValidationMessage('Registration saved, but view switch failed: ' + switchError.message, 'warning');
+            }
+
         } catch (err) {
-            console.error('Error applying transform:', err);
-            showValidationMessage('Error saving transform: ' + err.message, 'error');
+            console.error('Registration error:', err);
+            showValidationMessage('Error: ' + err.message, 'error');
+
+            // Restore button state on error
+            const computeBtn = document.getElementById('computeTransformBtn');
+            computeBtn.textContent = 'OK';
+            computeBtn.disabled = false;
         }
     });
 }
@@ -838,21 +950,33 @@ function exitPickMode() {
 
     // Restore modal, hide overlay
     if (pickModeOverlay) pickModeOverlay.style.display = 'none';
+    if (manualModal) manualModal.style.display = 'block';
 
-    // Only show modal if we are actually in the flow (checking visibility of other elements or assuming yes)
-    // Ideally we only show it if it was open. Since exitPickMode is called by 'Close' too, we need to be careful.
-    // If called from "Finish Picking", we want to show modal.
-    // If called from "Close", we are closing everything.
-    // However, exitPickMode doesn't know the context directly. 
-    // BUT: togglePickMode (disabling) implies user clicked "Finish/Exit" or button.
-    // Let's assume we want to show the modal if we are exiting pick mode explicitly.
-    // If the modal was closed via "Close", manualModal.style.display is already none.
+    // Force render update
+    if (splitViewViewer) {
+        if (splitViewViewer.sourceViewer) {
+            splitViewViewer.sourceViewer.renderer.render(
+                splitViewViewer.sourceViewer.scene,
+                splitViewViewer.sourceViewer.camera
+            );
+        }
+        if (splitViewViewer.targetViewer) {
+            splitViewViewer.targetViewer.renderer.render(
+                splitViewViewer.targetViewer.scene,
+                splitViewViewer.targetViewer.camera
+            );
+        }
+    }
 
-    // Simple logic: If we are exiting pick mode (and not just cleaning up), we probably want to see the modal again to compute.
-    if (manualModal && manualModal.style.display === 'none' && enterBtn.offsetParent !== null) {
-        // Check if we originated from the modal logic.
-        // Let's just forcefully show it if we are toggling off.
-        manualModal.style.display = 'block';
+    // Update button OK state based on current points
+    const computeBtn = document.getElementById('computeTransformBtn');
+    if (computeBtn) {
+        if (manualState.sourcePoints.length === 4 && manualState.targetPoints.length === 4) {
+            computeBtn.disabled = false;
+            showValidationMessage('Ready! Click OK to register.', 'success');
+        } else {
+            computeBtn.disabled = true;
+        }
     }
 
     showValidationMessage('Pick mode disabled', 'info');
@@ -990,6 +1114,7 @@ function onPointPicked(side, threePoint) {
     // Enable compute when we have exactly 4 pairs
     if (manualState.sourcePoints.length === 4 && manualState.targetPoints.length === 4) {
         document.getElementById('computeTransformBtn').disabled = false;
+        showValidationMessage('4 points picked! Click OK to register.', 'success');
         // Optional: Auto-exit pick mode?
         // togglePickMode(); 
     }
@@ -998,5 +1123,177 @@ function onPointPicked(side, threePoint) {
     updatePickOverlayCounts();
 }
 
+// Setup overlay viewer controls (shown after successful registration)
+function setupOverlayControls() {
+    const backBtn = document.getElementById('backToSplitViewBtn');
+    const toggleSourceBtn = document.getElementById('overlayToggleSource');
+    const toggleTargetBtn = document.getElementById('overlayToggleTarget');
+    const sourceOpacitySlider = document.getElementById('overlaySourceOpacity');
+    const targetOpacitySlider = document.getElementById('overlayTargetOpacity');
+    const cameraPresetSelect = document.getElementById('overlayCameraPreset');
+    const finishBtn = document.getElementById('finishRegBtn');
+
+    if (backBtn) {
+        backBtn.addEventListener('click', () => {
+            // Go back to split view
+            const viewerContainer = document.getElementById('viewerContainer');
+            const overlayControls = document.getElementById('overlayControlsPanel');
+            const splitViewCont = document.getElementById('splitViewContainer');
+            const viewerCtrls = document.getElementById('viewerControlsPanel');
+
+            if (viewerContainer) viewerContainer.style.display = 'none';
+            if (overlayControls) overlayControls.style.display = 'none';
+            if (splitViewCont) splitViewCont.style.display = 'flex';
+            if (viewerCtrls) viewerCtrls.style.display = 'block';
+        });
+    }
+
+    // Add "Refine Alignment (ICP)" button if not present
+    let refineBtn = document.getElementById('refineRegBtn');
+    if (!refineBtn) {
+        // Create button container or append to existing
+        const panel = document.getElementById('overlayControlsPanel');
+        if (panel) {
+            refineBtn = document.createElement('button');
+            refineBtn.id = 'refineRegBtn';
+            refineBtn.className = 'btn secondary-btn'; // Use existing class
+            refineBtn.textContent = '✨ Refine Alignment (ICP)';
+            refineBtn.style.marginTop = '10px';
+            refineBtn.style.marginBottom = '10px';
+            refineBtn.style.width = '100%';
+
+            // Insert before Finish button
+            if (finishBtn) {
+                panel.insertBefore(refineBtn, finishBtn);
+            } else {
+                panel.appendChild(refineBtn);
+            }
+
+            refineBtn.addEventListener('click', async () => {
+                console.log('Refine button clicked');
+                console.log('Current Transform:', manualState.transform);
+
+                if (!manualState.transform) {
+                    console.error('No transform found in state!');
+                    return;
+                }
+
+                try {
+                    const originalText = refineBtn.textContent;
+                    refineBtn.textContent = 'Refining...';
+                    refineBtn.disabled = true;
+
+                    const payload = {
+                        source_path: selectedSource.file_path,
+                        target_path: selectedTarget.file_path,
+                        rotation: manualState.transform.rotation,
+                        translation: manualState.transform.translation
+                    };
+                    console.log('Sending ICP payload:', payload);
+
+                    // We need selectedTarget.file_path. Let's make sure 'selectedTarget' is accessible.
+                    // It is global in this file.
+
+                    const resp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/icp`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const result = await resp.json();
+                    if (!resp.ok) throw new Error(result.error || 'Refinement failed');
+
+                    // Update state with REFINED transform
+                    manualState.transform = {
+                        rotation: result.rotation,
+                        translation: result.translation,
+                        rmse: result.rmse
+                    };
+
+                    console.log('Refinement successful:', result);
+                    showValidationMessage(`Refined! RMSE improved to ${result.rmse.toFixed(3)}`, 'success');
+
+                    // Update view
+                    await switchToRegistrationOverlayView();
+
+                    // Also update the SAVED file on backend
+                    await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/apply`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            source_path: selectedSource.file_path,
+                            rotation: result.rotation,
+                            translation: result.translation
+                        })
+                    });
+
+                } catch (err) {
+                    console.error('Refinement error:', err);
+                    showValidationMessage('Refinement failed: ' + err.message, 'error');
+                } finally {
+                    const btn = document.getElementById('refineRegBtn');
+                    if (btn) {
+                        btn.textContent = '✨ Refine Alignment (ICP)';
+                        btn.disabled = false;
+                    }
+                }
+            });
+        }
+    }
+
+    if (toggleSourceBtn) {
+        toggleSourceBtn.addEventListener('change', (e) => {
+            if (registrationViewer && registrationViewer.sourceMesh) {
+                registrationViewer.sourceMesh.visible = e.target.checked;
+            }
+        });
+    }
+
+    if (toggleTargetBtn) {
+        toggleTargetBtn.addEventListener('change', (e) => {
+            if (registrationViewer && registrationViewer.targetMesh) {
+                registrationViewer.targetMesh.visible = e.target.checked;
+            }
+        });
+    }
+
+    if (sourceOpacitySlider) {
+        sourceOpacitySlider.addEventListener('input', (e) => {
+            if (registrationViewer && registrationViewer.sourceMesh && registrationViewer.sourceMesh.material) {
+                registrationViewer.sourceMesh.material.opacity = e.target.value / 100;
+            }
+            document.getElementById('overlaySourceOpacityValue').textContent = e.target.value + '%';
+        });
+    }
+
+    if (targetOpacitySlider) {
+        targetOpacitySlider.addEventListener('input', (e) => {
+            if (registrationViewer && registrationViewer.targetMesh && registrationViewer.targetMesh.material) {
+                registrationViewer.targetMesh.material.opacity = e.target.value / 100;
+            }
+            document.getElementById('overlayTargetOpacityValue').textContent = e.target.value + '%';
+        });
+    }
+
+    if (cameraPresetSelect) {
+        cameraPresetSelect.addEventListener('change', (e) => {
+            if (registrationViewer) {
+                registrationViewer.applyPreset(e.target.value);
+            }
+        });
+    }
+
+    if (finishBtn) {
+        finishBtn.addEventListener('click', () => {
+            showValidationMessage('Registration results saved successfully!', 'success');
+            // Could navigate to next step or show more options here
+        });
+    }
+}
+
 // Initialize when page loads
-window.addEventListener('DOMContentLoaded', () => { initRegistration(); setupManualRegistrationUI(); });
+window.addEventListener('DOMContentLoaded', () => {
+    initRegistration();
+    setupManualRegistrationUI();
+    setupOverlayControls();
+});

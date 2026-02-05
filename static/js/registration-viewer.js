@@ -8,11 +8,11 @@ class RegistrationViewer {
         this.camera = null;
         this.renderer = null;
         this.controls = null;
-        
+
         // Meshes
         this.sourceMesh = null;
         this.targetMesh = null;
-        
+
         // Mouse interaction
         this.raycaster = new THREE.Raycaster();
         this.mouse = new THREE.Vector2();
@@ -20,7 +20,7 @@ class RegistrationViewer {
         this.isDragging = false;
         this.previousMousePosition = { x: 0, y: 0 };
         this.rotationSpeed = 0.01;
-        
+
         // State
         this.cameraPresets = {
             isometric: { pos: [5, 5, 5], target: [0, 0, 0] },
@@ -46,30 +46,33 @@ class RegistrationViewer {
         if (height === 0) height = 600;
 
         // Create camera
-        this.camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-        this.camera.position.set(5, 5, 5);
+        // Create camera
+        this.camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 50000);
+        this.camera.position.set(50, 50, 50);
         this.camera.lookAt(0, 0, 0);
 
         // Create renderer
         this.renderer = new THREE.WebGLRenderer({
             canvas: this.canvas,
             antialias: true,
-            alpha: true
+            alpha: true,
+            logarithmicDepthBuffer: true // Helps with large depth ranges
         });
         this.renderer.setSize(width, height);
         this.renderer.setPixelRatio(window.devicePixelRatio);
 
         // Add lights
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         this.scene.add(ambientLight);
 
-        const directionalLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight1.position.set(5, 5, 5);
-        this.scene.add(directionalLight1);
+        // Headlight (attached to camera)
+        this.camera.add(new THREE.PointLight(0xffffff, 0.8));
+        this.scene.add(this.camera); // Important: add camera to scene for headlight to work
 
-        const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
-        directionalLight2.position.set(-5, -5, -5);
-        this.scene.add(directionalLight2);
+        // Additional Directional Light for shape definition
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        dirLight.position.set(0, 100, 100);
+        this.scene.add(dirLight);
 
         // Add orbit controls (disabled by default when rotating models)
         this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
@@ -102,29 +105,29 @@ class RegistrationViewer {
 
         // Get objects intersecting the picking ray
         this.raycaster.setFromCamera(this.mouse, this.camera);
-        
+
         const meshes = [];
         if (this.sourceMesh) meshes.push(this.sourceMesh);
         if (this.targetMesh) meshes.push(this.targetMesh);
-        
+
         const intersects = this.raycaster.intersectObjects(meshes);
 
         if (intersects.length > 0) {
             const clickedMesh = intersects[0].object;
-            
+
             // Determine which model was clicked
             if (clickedMesh === this.sourceMesh) {
                 this.selectedModel = 'source';
             } else if (clickedMesh === this.targetMesh) {
                 this.selectedModel = 'target';
             }
-            
+
             this.isDragging = true;
             this.previousMousePosition = { x: event.clientX, y: event.clientY };
-            
+
             // Disable camera controls when rotating a model
             this.controls.enabled = false;
-            
+
             // Visual feedback - highlight selected model
             this.updateModelHighlight();
         }
@@ -137,7 +140,7 @@ class RegistrationViewer {
         const deltaY = event.clientY - this.previousMousePosition.y;
 
         const model = this.selectedModel === 'source' ? this.sourceMesh : this.targetMesh;
-        
+
         if (model) {
             // Rotate based on mouse movement
             model.rotation.y += deltaX * this.rotationSpeed;
@@ -149,10 +152,10 @@ class RegistrationViewer {
 
     onMouseUp(event) {
         this.isDragging = false;
-        
+
         // Re-enable camera controls
         this.controls.enabled = true;
-        
+
         // Remove highlight
         this.updateModelHighlight();
     }
@@ -190,7 +193,7 @@ class RegistrationViewer {
 
             // Load source model (colored, movable)
             this.sourceMesh = await this.loadModel(sourceUrl, sourceType, 'source');
-            
+
             // Load target model (gray, fixed)
             this.targetMesh = await this.loadModel(targetUrl, targetType, 'target');
 
@@ -332,7 +335,7 @@ class RegistrationViewer {
 
     fitCameraToObjects() {
         const box = new THREE.Box3();
-        
+
         if (this.sourceMesh) box.expandByObject(this.sourceMesh);
         if (this.targetMesh) box.expandByObject(this.targetMesh);
 
@@ -380,7 +383,7 @@ class RegistrationViewer {
     // REG-02.4: Apply camera preset
     applyPreset(presetName) {
         const preset = this.cameraPresets[presetName];
-        
+
         if (presetName === 'fitAll') {
             this.fitCameraToObjects();
         } else if (preset) {
@@ -414,9 +417,9 @@ class RegistrationViewer {
     // Model Rotation Methods
     rotateSourceModel(axis, amount) {
         if (!this.sourceMesh) return;
-        
+
         const rotation = amount * Math.PI / 180; // Convert to radians
-        
+
         if (axis === 'x') this.sourceMesh.rotation.x += rotation;
         else if (axis === 'y') this.sourceMesh.rotation.y += rotation;
         else if (axis === 'z') this.sourceMesh.rotation.z += rotation;
@@ -424,9 +427,9 @@ class RegistrationViewer {
 
     rotateTargetModel(axis, amount) {
         if (!this.targetMesh) return;
-        
+
         const rotation = amount * Math.PI / 180; // Convert to radians
-        
+
         if (axis === 'x') this.targetMesh.rotation.x += rotation;
         else if (axis === 'y') this.targetMesh.rotation.y += rotation;
         else if (axis === 'z') this.targetMesh.rotation.z += rotation;
@@ -476,7 +479,7 @@ class PreviewViewer {
         this.controls = null;
         this.mesh = null;
         this.animationId = null;
-        
+
         this.init();
     }
 
@@ -564,7 +567,7 @@ class PreviewViewer {
                 console.log('PLY loaded successfully');
                 geometry.computeVertexNormals();
                 geometry.center();
-                
+
                 // Try vertex colors, otherwise gradient
                 let material;
                 if (geometry.attributes.color) {
@@ -577,7 +580,7 @@ class PreviewViewer {
                     const colors = new Float32Array(geometry.attributes.position.array.length);
                     const posAttr = geometry.attributes.position;
                     const posArray = posAttr.array;
-                    
+
                     for (let i = 0; i < posArray.length; i += 3) {
                         const y = posArray[i + 1];
                         const hue = (y + 2) / 4; // Normalize Y to [0, 1]
@@ -586,14 +589,14 @@ class PreviewViewer {
                         colors[i + 1] = color.g;
                         colors[i + 2] = color.b;
                     }
-                    
+
                     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
                     material = new THREE.MeshPhongMaterial({
                         vertexColors: true,
                         shininess: 100
                     });
                 }
-                
+
                 this.mesh = new THREE.Mesh(geometry, material);
                 this.scene.add(this.mesh);
                 console.log('PLY mesh added to scene');
@@ -615,12 +618,12 @@ class PreviewViewer {
                 console.log('STL loaded successfully');
                 geometry.computeVertexNormals();
                 geometry.center();
-                
+
                 // Create gradient coloring for STL
                 const colors = new Float32Array(geometry.attributes.position.array.length);
                 const posAttr = geometry.attributes.position;
                 const posArray = posAttr.array;
-                
+
                 for (let i = 0; i < posArray.length; i += 3) {
                     const y = posArray[i + 1];
                     const hue = (y + 2) / 4;
@@ -629,14 +632,14 @@ class PreviewViewer {
                     colors[i + 1] = color.g;
                     colors[i + 2] = color.b;
                 }
-                
+
                 geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-                
+
                 const material = new THREE.MeshPhongMaterial({
                     vertexColors: true,
                     shininess: 100
                 });
-                
+
                 this.mesh = new THREE.Mesh(geometry, material);
                 this.scene.add(this.mesh);
                 console.log('STL mesh added to scene');

@@ -262,12 +262,15 @@ class IndependentModelViewer {
             const hitPoint = intersects[0].point.clone();
 
             // Convert display hit point back to original model coordinates
-            if (this.modelScale && this.modelCenter) {
-                const originalPoint = hitPoint.clone().divideScalar(this.modelScale).add(this.modelCenter);
-                this.onPointPick(originalPoint);
-            } else {
-                this.onPointPick(hitPoint);
+            // Use worldToLocal to handle Inverse Rotation and Scale automatically
+            const localPoint = intersects[0].point.clone();
+            this.mesh.worldToLocal(localPoint);
+
+            if (this.modelCenter) {
+                // Geometry was translated by -center, so we add center back
+                localPoint.add(this.modelCenter);
             }
+            this.onPointPick(localPoint);
         } else {
             console.warn("Pick Click detected but no intersection found.");
         }

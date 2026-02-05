@@ -198,6 +198,69 @@
                         Continue to Registration →
                     </button>
                 </div>
+
+                <!-- Registration Result Overlay Controls -->
+                <div id="overlayControlsPanel" class="sidebar-section" style="display: none;">
+                    <div
+                        style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                        <h2 class="section-title" style="margin-bottom: 0;">Registration Result</h2>
+                        <button id="backToSplitViewBtn" class="btn btn-small" title="Back to Split View">← Back</button>
+                    </div>
+
+                    <!-- Result Info -->
+                    <div id="registrationResultInfo" style="background: rgba(76, 175, 80, 0.1); border: 1px solid rgba(76, 175, 80, 0.3); border-radius: 6px; padding: 12px; margin-bottom: 16px; color: #4caf50; font-size: 0.9rem;">
+                        <strong>✓ Registration Complete</strong>
+                        <p style="margin: 8px 0 0 0; font-size: 0.85rem;">Source model is now aligned with target. You can rotate and inspect the result below.</p>
+                    </div>
+
+                    <!-- Visibility Toggles -->
+                    <div class="control-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="overlayToggleSource" checked>
+                            <span>Show Source (Jaw)</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="overlayToggleTarget" checked>
+                            <span>Show Target (Face)</span>
+                        </label>
+                    </div>
+
+                    <!-- Opacity Sliders -->
+                    <div class="control-group">
+                        <div class="slider-group">
+                            <label for="overlaySourceOpacity">Source Opacity</label>
+                            <div class="slider-container">
+                                <input type="range" id="overlaySourceOpacity" min="0" max="100" value="80" class="slider">
+                                <span id="overlaySourceOpacityValue" class="slider-value">80%</span>
+                            </div>
+                        </div>
+
+                        <div class="slider-group">
+                            <label for="overlayTargetOpacity">Target Opacity</label>
+                            <div class="slider-container">
+                                <input type="range" id="overlayTargetOpacity" min="0" max="100" value="60" class="slider">
+                                <span id="overlayTargetOpacityValue" class="slider-value">60%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Camera Presets -->
+                    <div class="control-group">
+                        <label for="overlayCameraPreset">Camera Preset</label>
+                        <select id="overlayCameraPreset" class="custom-select">
+                            <option value="isometric">Isometric</option>
+                            <option value="front">Front View</option>
+                            <option value="top">Top View</option>
+                            <option value="left">Left View</option>
+                            <option value="fitAll">Fit All</option>
+                        </select>
+                    </div>
+
+                    <!-- Next Step -->
+                    <button id="finishRegBtn" class="btn btn-primary">
+                        Finish & Save →
+                    </button>
+                </div>
             </aside>
 
             <!-- Main Viewer Area -->
@@ -233,29 +296,26 @@
                 </div>
 
                 <!-- Manual Registration Modal -->
-                <div id="manualRegModal" class="modal"
-                    style="display:none; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 1000; background: rgba(20,20,30,0.98); padding: 16px; border-radius: 8px; width: 480px; max-width: 90%; box-shadow: 0 6px 24px rgba(0,0,0,0.6); color: #fff;">
+                <div id="manualRegModal" class="modal">
                     <h3 style="margin-top:0;">Manual Registration (4-point)</h3>
                     <p style="font-size:0.9rem; color:#ccc;">Pick exactly 4 matching landmark pairs on Source and
-                        Target. Use the "Pick Point" button then click on the model.</p>
-                    <div style="display:flex; gap:12px;">
+                        Target. Use the "Enter Pick Mode" button then click on the model.</p>
+                    <div style="display:flex; gap:12px; margin-bottom: 16px;">
                         <div style="flex:1;">
                             <h4 style="margin:4px 0">Source Points</h4>
                             <ol id="sourcePointsList"
-                                style="max-height:160px; overflow:auto; padding-left:18px; color:#fff"></ol>
+                                style="max-height:160px; overflow:auto; padding-left:18px; color:#fff; margin: 4px 0;"></ol>
                         </div>
                         <div style="flex:1;">
                             <h4 style="margin:4px 0">Target Points</h4>
                             <ol id="targetPointsList"
-                                style="max-height:160px; overflow:auto; padding-left:18px; color:#fff"></ol>
+                                style="max-height:160px; overflow:auto; padding-left:18px; color:#fff; margin: 4px 0;"></ol>
                         </div>
                     </div>
-                    <div style="display:flex; gap:8px; margin-top:12px; justify-content:flex-end;">
+                    <div style="display:flex; gap:8px; margin-top:12px; justify-content:flex-end; flex-wrap: wrap;">
                         <button id="clearPointsBtn" class="btn btn-secondary">Clear</button>
                         <button id="enterPickModeBtn" class="btn btn-primary">Enter Pick Mode</button>
-                        <button id="computeTransformBtn" class="btn btn-primary" disabled>Compute Transform</button>
-                        <button id="previewTransformBtn" class="btn btn-secondary" disabled>Preview</button>
-                        <button id="acceptTransformBtn" class="btn btn-success" disabled>Accept</button>
+                        <button id="computeTransformBtn" class="btn btn-success" disabled>OK</button>
                         <button id="closeManualModalBtn" class="btn btn-small">Close</button>
                     </div>
                 </div>
