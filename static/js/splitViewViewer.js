@@ -401,25 +401,35 @@ class IndependentModelViewer {
 
     // Markers for picked points
     addMarker(worldPosition, color = 0xff0000, label = null) {
-        if (!this.scene) return null;
+        if (!this.mesh) return null;
 
-        // Convert world (original model) position to displayed coordinates
-        let displayPos = worldPosition.clone();
-        if (this.modelCenter && this.modelScale) {
-            displayPos.sub(this.modelCenter).multiplyScalar(this.modelScale);
+        // Convert Real World Position -> Mesh Local Position (Geometry Space)
+        // because we will attach the marker to the mesh itself.
+        const localPos = worldPosition.clone();
+        if (this.modelCenter) {
+            localPos.sub(this.modelCenter);
         }
 
-        const geometry = new THREE.SphereGeometry(0.04, 16, 16);
+        const geometry = new THREE.SphereGeometry(0.05, 16, 16);
         const material = new THREE.MeshBasicMaterial({
             color: color,
             depthTest: false, // Always show on top
             transparent: true
         });
         const marker = new THREE.Mesh(geometry, material);
-        marker.position.copy(displayPos);
-        marker.renderOrder = 999; // Render last
 
-        this.scene.add(marker);
+        marker.position.copy(localPos);
+        marker.renderOrder = 999;
+
+        // Counter-scale the marker so it appears as a constant size 
+        // regardless of how much the model was scaled down
+        if (this.modelScale) {
+            const s = 1.0 / this.modelScale;
+            marker.scale.set(s, s, s);
+        }
+
+        // Attach to mesh so it rotates with the model!
+        this.mesh.add(marker);
 
         // Add label if provided
         if (label) {
