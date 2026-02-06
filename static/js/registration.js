@@ -520,15 +520,32 @@ async function switchToRegistrationOverlayView() {
                     sourceClone.applyMatrix4(m);
                 }
 
-                // Add to registration viewer scene
-                if (registrationViewer.scene) {
-                    registrationViewer.scene.add(sourceClone);
-                    registrationViewer.scene.add(targetClone);
+                // Add to registration viewer's unified rotation group
+                if (registrationViewer.scene && registrationViewer.rotationGroup) {
+                    // Clear previous group children
+                    while (registrationViewer.rotationGroup.children.length > 0) {
+                        registrationViewer.rotationGroup.remove(registrationViewer.rotationGroup.children[0]);
+                    }
+
+                    // --- Fix Rotation Pivot (REG-02.3) ---
+                    // By default, the group rotates around (0,0,0). 
+                    // If models are far from origin, they "orbit" instead of rotating in place.
+                    // Solution: Position the group at the model center, and offset the meshes locally.
+                    const pivot = targetViewer.modelCenter.clone();
+
+                    registrationViewer.rotationGroup.position.copy(pivot);
+                    registrationViewer.rotationGroup.rotation.set(0, 0, 0); // Reset for new registration
+
+                    // Adjust mesh positions to be relative to the group center (pivot)
+                    targetClone.position.sub(pivot); // Effectively (0,0,0) locally
+                    sourceClone.position.sub(pivot); // Transformed position relative to target center
+
+                    registrationViewer.rotationGroup.add(sourceClone);
+                    registrationViewer.rotationGroup.add(targetClone);
 
                     // Update references
                     registrationViewer.sourceMesh = sourceClone;
                     registrationViewer.targetMesh = targetClone;
-                    registrationViewer.selectedModel = 'source'; // Default selection
 
                     // Set visual properties
                     sourceClone.visible = true;
@@ -539,8 +556,8 @@ async function switchToRegistrationOverlayView() {
                     // Fit camera to show the restored world-space models
                     registrationViewer.fitCameraToObjects();
 
-                    console.log('✓ Models restored to world coordinates and aligned');
-                    showValidationMessage('Registration complete! Viewing aligned models.', 'success');
+                    console.log('✓ Models added to unified rotation group with centered pivot');
+                    showValidationMessage('Registration complete! Rotating models as a unit.', 'success');
                 }
             }
         }
@@ -632,6 +649,24 @@ function setupRotationControls() {
     document.getElementById('targetResetRotation')?.addEventListener('click', () => {
         if (splitViewViewer) splitViewViewer.resetTargetRotation();
         if (registrationViewer) registrationViewer.resetTargetRotation();
+    });
+
+    // Unified Overlay Rotation
+    const bindUnifiedRotate = (id, axis, dir) => {
+        document.getElementById(id)?.addEventListener('click', () => {
+            if (registrationViewer) registrationViewer.rotateAll(axis, rotationAmount * dir);
+        });
+    };
+
+    bindUnifiedRotate('overlayRotateXPos', 'x', 1);
+    bindUnifiedRotate('overlayRotateXNeg', 'x', -1);
+    bindUnifiedRotate('overlayRotateYPos', 'y', 1);
+    bindUnifiedRotate('overlayRotateYNeg', 'y', -1);
+    bindUnifiedRotate('overlayRotateZPos', 'z', 1);
+    bindUnifiedRotate('overlayRotateZNeg', 'z', -1);
+
+    document.getElementById('overlayResetRotation')?.addEventListener('click', () => {
+        if (registrationViewer) registrationViewer.resetRotation();
     });
 }
 
@@ -877,6 +912,11 @@ function setupManualRegistrationUI() {
 
             console.log('Backend registration successful:', applyResult);
 
+            // Explicitly log the Coarse (Manual) RMSE as requested
+            console.log('=== MANUAL REGISTRATION RESULTS ===');
+            console.log(`RMSE (Coarse): ${result.rmse.toFixed(4)}`);
+            console.log('===================================');
+
             showValidationMessage(`✓ Registration successful! RMSE=${result.rmse.toFixed(3)}`, 'success');
 
             // Restore button state
@@ -1070,7 +1110,8 @@ function clearManualPoints() {
     manualState.targetMarkers = [];
     manualState.previewApplied = false;
     manualState.originalSourceMatrix = null;
-    manualState.transform = null;
+    // DON'T clear transform - it's needed for ICP refinement!
+    // manualState.transform = null;
 
     document.getElementById('sourcePointsList').innerHTML = '';
     document.getElementById('targetPointsList').innerHTML = '';
@@ -1080,9 +1121,14 @@ function clearManualPoints() {
         splitViewViewer.targetViewer.clearMarkers();
     }
 
-    document.getElementById('computeTransformBtn').disabled = true;
-    document.getElementById('previewTransformBtn').disabled = true;
-    document.getElementById('acceptTransformBtn').disabled = true;
+    const computeBtn = document.getElementById('computeTransformBtn');
+    if (computeBtn) computeBtn.disabled = true;
+
+    const previewBtn = document.getElementById('previewTransformBtn');
+    if (previewBtn) previewBtn.disabled = true;
+
+    const acceptBtn = document.getElementById('acceptTransformBtn');
+    if (acceptBtn) acceptBtn.disabled = true;
 }
 
 function onPointPicked(side, threePoint) {
@@ -1210,6 +1256,17 @@ function setupOverlayControls() {
                     const result = await resp.json();
                     if (!resp.ok) throw new Error(result.error || 'Refinement failed');
 
+                    // Calculate RMSE improvement
+                    const rmse_before = manualState.transform.rmse || 0;
+                    const rmse_after = result.rmse || 0;
+                    const improvement = rmse_before > 0 ? ((rmse_before - rmse_after) / rmse_before * 100).toFixed(1) : 0;
+
+                    console.log('=== ICP REFINEMENT RESULTS ===');
+                    console.log(`RMSE Before ICP: ${rmse_before.toFixed(4)}`);
+                    console.log(`RMSE After ICP:  ${rmse_after.toFixed(4)}`);
+                    console.log(`Improvement:     ${improvement}%`);
+                    console.log('==============================');
+
                     // Update state with REFINED transform
                     manualState.transform = {
                         rotation: result.rotation,
@@ -1218,7 +1275,7 @@ function setupOverlayControls() {
                     };
 
                     console.log('Refinement successful:', result);
-                    showValidationMessage(`Refined! RMSE improved to ${result.rmse.toFixed(3)}`, 'success');
+                    showValidationMessage(`Refined! RMSE: ${rmse_before.toFixed(3)} → ${rmse_after.toFixed(3)} (${improvement}% better)`, 'success');
 
                     // Update view
                     await switchToRegistrationOverlayView();
