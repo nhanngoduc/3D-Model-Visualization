@@ -468,6 +468,7 @@ async function switchToRegistrationOverlayView() {
                 // Clone the meshes to add to registration viewer
                 // Use shallow clone to preserve materials while allowing independent transforms
                 const sourceClone = sourceMesh.clone();
+<<<<<<< HEAD
                 const targetClone = targetMesh.clone();
                 
                 // Add to registration viewer scene
@@ -489,6 +490,44 @@ async function switchToRegistrationOverlayView() {
                     registrationViewer.targetMesh = targetClone;
                     
                     // Ensure meshes are visible with appropriate opacity
+=======
+                sourceClone.rotation.set(0, 0, 0);
+                sourceClone.scale.setScalar(1);
+                if (sourceViewer.modelCenter) {
+                    sourceClone.position.copy(sourceViewer.modelCenter);
+                }
+
+                // Apply Registration Transform to Source
+                if (manualState.transform) {
+                    const R = manualState.transform.rotation;
+                    const t = manualState.transform.translation;
+
+                    const m = new THREE.Matrix4();
+                    m.set(
+                        R[0][0], R[0][1], R[0][2], t[0],
+                        R[1][0], R[1][1], R[1][2], t[1],
+                        R[2][0], R[2][1], R[2][2], t[2],
+                        0, 0, 0, 1
+                    );
+
+                    // Apply matrix. Since the mesh is now effectively at P_world origin but translated by position=C,
+                    // applying matrix M to the object works as: M * Translate(C) * Vertices.
+                    // This correctly transforms the model in World Space.
+                    sourceClone.applyMatrix4(m);
+                }
+
+                // Add to registration viewer scene
+                if (registrationViewer.scene) {
+                    registrationViewer.scene.add(sourceClone);
+                    registrationViewer.scene.add(targetClone);
+
+                    // Update references
+                    registrationViewer.sourceMesh = sourceClone;
+                    registrationViewer.targetMesh = targetClone;
+                    registrationViewer.selectedModel = 'source'; // Default selection
+
+                    // Set visual properties
+>>>>>>> parent of fda7241 (fix registration model rotation)
                     sourceClone.visible = true;
                     targetClone.visible = true;
                     
@@ -497,12 +536,18 @@ async function switchToRegistrationOverlayView() {
                     
                     // Fit camera to show both models
                     registrationViewer.fitCameraToObjects();
+<<<<<<< HEAD
                     
                     // Force a render
                     registrationViewer.renderer.render(registrationViewer.scene, registrationViewer.camera);
                     
                     console.log('✓ Both models loaded in overlay view');
                     showValidationMessage('Registration complete! Viewing combined models.', 'success');
+=======
+
+                    console.log('✓ Models restored to world coordinates and aligned');
+                    showValidationMessage('Registration complete! Viewing aligned models.', 'success');
+>>>>>>> parent of fda7241 (fix registration model rotation)
                 }
             }
         }
@@ -875,6 +920,7 @@ function setupManualRegistrationUI() {
             const applyResult = await applyResp.json();
             if (!applyResp.ok) throw new Error(applyResult.error || 'Save failed');
 
+<<<<<<< HEAD
             // Step 4: Force re-render the viewers
             if (splitViewViewer) {
                 if (splitViewViewer.sourceViewer && splitViewViewer.sourceViewer.renderer) {
@@ -890,6 +936,9 @@ function setupManualRegistrationUI() {
                     );
                 }
             }
+=======
+            console.log('Backend registration successful:', applyResult);
+>>>>>>> parent of fda7241 (fix registration model rotation)
 
             showValidationMessage(`✓ Registration successful! RMSE=${result.rmse.toFixed(3)}`, 'success');
             
@@ -1165,6 +1214,102 @@ function setupOverlayControls() {
         });
     }
 
+<<<<<<< HEAD
+=======
+    // Add "Refine Alignment (ICP)" button if not present
+    let refineBtn = document.getElementById('refineRegBtn');
+    if (!refineBtn) {
+        // Create button container or append to existing
+        const panel = document.getElementById('overlayControlsPanel');
+        if (panel) {
+            refineBtn = document.createElement('button');
+            refineBtn.id = 'refineRegBtn';
+            refineBtn.className = 'btn secondary-btn'; // Use existing class
+            refineBtn.textContent = '✨ Refine Alignment (ICP)';
+            refineBtn.style.marginTop = '10px';
+            refineBtn.style.marginBottom = '10px';
+            refineBtn.style.width = '100%';
+
+            // Insert before Finish button
+            if (finishBtn) {
+                panel.insertBefore(refineBtn, finishBtn);
+            } else {
+                panel.appendChild(refineBtn);
+            }
+
+            refineBtn.addEventListener('click', async () => {
+                console.log('Refine button clicked');
+                console.log('Current Transform:', manualState.transform);
+
+                if (!manualState.transform) {
+                    console.error('No transform found in state!');
+                    return;
+                }
+
+                try {
+                    const originalText = refineBtn.textContent;
+                    refineBtn.textContent = 'Refining...';
+                    refineBtn.disabled = true;
+
+                    const payload = {
+                        source_path: selectedSource.file_path,
+                        target_path: selectedTarget.file_path,
+                        rotation: manualState.transform.rotation,
+                        translation: manualState.transform.translation
+                    };
+                    console.log('Sending ICP payload:', payload);
+
+                    // We need selectedTarget.file_path. Let's make sure 'selectedTarget' is accessible.
+                    // It is global in this file.
+
+                    const resp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/icp`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    const result = await resp.json();
+                    if (!resp.ok) throw new Error(result.error || 'Refinement failed');
+
+                    // Update state with REFINED transform
+                    manualState.transform = {
+                        rotation: result.rotation,
+                        translation: result.translation,
+                        rmse: result.rmse
+                    };
+
+                    console.log('Refinement successful:', result);
+                    showValidationMessage(`Refined! RMSE improved to ${result.rmse.toFixed(3)}`, 'success');
+
+                    // Update view
+                    await switchToRegistrationOverlayView();
+
+                    // Also update the SAVED file on backend
+                    await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/apply`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            source_path: selectedSource.file_path,
+                            rotation: result.rotation,
+                            translation: result.translation
+                        })
+                    });
+
+                } catch (err) {
+                    console.error('Refinement error:', err);
+                    showValidationMessage('Refinement failed: ' + err.message, 'error');
+                } finally {
+                    const btn = document.getElementById('refineRegBtn');
+                    if (btn) {
+                        btn.textContent = '✨ Refine Alignment (ICP)';
+                        btn.disabled = false;
+                    }
+                }
+            });
+        }
+    }
+
+>>>>>>> parent of fda7241 (fix registration model rotation)
     if (toggleSourceBtn) {
         toggleSourceBtn.addEventListener('change', (e) => {
             if (registrationViewer && registrationViewer.sourceMesh) {

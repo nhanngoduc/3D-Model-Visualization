@@ -12,7 +12,6 @@ class RegistrationViewer {
         // Meshes
         this.sourceMesh = null;
         this.targetMesh = null;
-        this.rotationGroup = new THREE.Group(); // New group for unified rotation
 
         // Mouse interaction
         this.raycaster = new THREE.Raycaster();
@@ -24,10 +23,10 @@ class RegistrationViewer {
 
         // State
         this.cameraPresets = {
-            isometric: { posDir: [1, 1, 1] },
-            front: { posDir: [0, 0, 1] },
-            top: { posDir: [0, 1, 0] },
-            left: { posDir: [-1, 0, 0] },
+            isometric: { pos: [5, 5, 5], target: [0, 0, 0] },
+            front: { pos: [0, 0, 8], target: [0, 0, 0] },
+            top: { pos: [0, 8, 0], target: [0, 0, 0] },
+            left: { pos: [-8, 0, 0], target: [0, 0, 0] },
             fitAll: null // Computed dynamically
         };
 
@@ -38,7 +37,6 @@ class RegistrationViewer {
         // Create scene
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x1a1a2e);
-        this.scene.add(this.rotationGroup); // Add group to scene
 
         // Get canvas dimensions
         let width = this.canvas.clientWidth || this.canvas.parentElement.clientWidth || 800;
@@ -136,15 +134,17 @@ class RegistrationViewer {
     }
 
     onMouseMove(event) {
-        if (!this.isDragging) return;
+        if (!this.isDragging || !this.selectedModel) return;
 
         const deltaX = event.clientX - this.previousMousePosition.x;
         const deltaY = event.clientY - this.previousMousePosition.y;
 
-        // REG-02.3 Fix: Rotate unified group instead of individual models
-        if (this.rotationGroup) {
-            this.rotationGroup.rotation.y += deltaX * this.rotationSpeed;
-            this.rotationGroup.rotation.x += deltaY * this.rotationSpeed;
+        const model = this.selectedModel === 'source' ? this.sourceMesh : this.targetMesh;
+
+        if (model) {
+            // Rotate based on mouse movement
+            model.rotation.y += deltaX * this.rotationSpeed;
+            model.rotation.x += deltaY * this.rotationSpeed;
         }
 
         this.previousMousePosition = { x: event.clientX, y: event.clientY };
@@ -168,8 +168,22 @@ class RegistrationViewer {
     }
 
     updateModelHighlight() {
-        // Highlight unified group or individual models? 
-        // For unified rotation, we can highlight the group if needed
+        // Add/remove outline or change material to indicate selection
+        if (this.sourceMesh && this.sourceMesh.material) {
+            if (this.selectedModel === 'source') {
+                this.sourceMesh.material.emissive.setHex(0x334455);
+            } else {
+                this.sourceMesh.material.emissive.setHex(0x000000);
+            }
+        }
+
+        if (this.targetMesh && this.targetMesh.material) {
+            if (this.selectedModel === 'target') {
+                this.targetMesh.material.emissive.setHex(0x334455);
+            } else {
+                this.targetMesh.material.emissive.setHex(0x000000);
+            }
+        }
     }
 
     // REG-01.6 & REG-02.1: Load both source and target models
@@ -320,40 +334,24 @@ class RegistrationViewer {
     }
 
     fitCameraToObjects() {
-        if (!this.rotationGroup) return;
-
-        // Ensure all world matrices are up to date before computing bounding box
-        this.scene.updateMatrixWorld(true);
-
         const box = new THREE.Box3();
-        // Use setFromObject on the group to get the collective world-space bounding box
-        box.setFromObject(this.rotationGroup);
 
-        if (box.isEmpty()) {
-            console.warn('fitCameraToObjects: Bounding box is empty');
-            return;
-        }
+        if (this.sourceMesh) box.expandByObject(this.sourceMesh);
+        if (this.targetMesh) box.expandByObject(this.targetMesh);
 
         const size = box.getSize(new THREE.Vector3());
         const center = box.getCenter(new THREE.Vector3());
         const maxDim = Math.max(size.x, size.y, size.z);
 
         const distance = maxDim * 2;
-
-        // Position camera to see everything
         this.camera.position.set(
             center.x + distance,
             center.y + distance,
             center.z + distance
         );
-
-        // Crucial: Update OrbitControls target so mouse rotation happens around the models
-        this.controls.target.copy(center);
         this.camera.lookAt(center);
-
+        this.controls.target.copy(center);
         this.controls.update();
-
-        console.log('Camera fitted to models. Center:', center, 'Distance:', distance);
     }
 
     // REG-02.2: Toggle visibility
@@ -384,34 +382,16 @@ class RegistrationViewer {
 
     // REG-02.4: Apply camera preset
     applyPreset(presetName) {
+        const preset = this.cameraPresets[presetName];
+
         if (presetName === 'fitAll') {
             this.fitCameraToObjects();
-            return;
+        } else if (preset) {
+            this.camera.position.set(preset.pos[0], preset.pos[1], preset.pos[2]);
+            this.camera.lookAt(preset.target[0], preset.target[1], preset.target[2]);
+            this.controls.target.set(preset.target[0], preset.target[1], preset.target[2]);
+            this.controls.update();
         }
-
-        const preset = this.cameraPresets[presetName];
-        if (!preset) return;
-
-        // Use current bounding box to determine distance and target
-        const box = new THREE.Box3();
-        if (this.sourceMesh) box.expandByObject(this.sourceMesh);
-        if (this.targetMesh) box.expandByObject(this.targetMesh);
-
-        const size = box.getSize(new THREE.Vector3());
-        const center = box.getCenter(new THREE.Vector3());
-        const maxDim = Math.max(size.x, size.y, size.z) || 10;
-        const distance = maxDim * 2;
-
-        const posDir = preset.posDir;
-        this.camera.position.set(
-            center.x + posDir[0] * distance,
-            center.y + posDir[1] * distance,
-            center.z + posDir[2] * distance
-        );
-
-        this.camera.lookAt(center);
-        this.controls.target.copy(center);
-        this.controls.update();
     }
 
     onWindowResize() {
@@ -453,17 +433,6 @@ class RegistrationViewer {
         if (axis === 'x') this.targetMesh.rotation.x += rotation;
         else if (axis === 'y') this.targetMesh.rotation.y += rotation;
         else if (axis === 'z') this.targetMesh.rotation.z += rotation;
-    }
-
-    rotateAll(axis, amount) {
-        const rotation = amount * Math.PI / 180;
-        if (axis === 'x') this.rotationGroup.rotation.x += rotation;
-        else if (axis === 'y') this.rotationGroup.rotation.y += rotation;
-        else if (axis === 'z') this.rotationGroup.rotation.z += rotation;
-    }
-
-    resetRotation() {
-        this.rotationGroup.rotation.set(0, 0, 0);
     }
 
     resetSourceRotation() {
