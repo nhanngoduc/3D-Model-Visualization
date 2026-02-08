@@ -435,21 +435,21 @@ function backToSelection() {
 async function switchToRegistrationOverlayView() {
     try {
         console.log('Switching to registration overlay view...');
-        
+
         // Hide split view and controls
         const splitViewCont = document.getElementById('splitViewContainer');
         const viewerCtrls = document.getElementById('viewerControlsPanel');
-        
+
         if (splitViewCont) splitViewCont.style.display = 'none';
         if (viewerCtrls) viewerCtrls.style.display = 'none';
-        
+
         // Show overlay viewer container and controls
         const viewerContainer = document.getElementById('viewerContainer');
         const overlayControls = document.getElementById('overlayControlsPanel');
-        
+
         if (viewerContainer) viewerContainer.style.display = 'block';
         if (overlayControls) overlayControls.style.display = 'block';
-        
+
         // Initialize registration overlay viewer if not already done
         if (!registrationViewer) {
             const regCanvas = document.getElementById('registrationViewer');
@@ -458,39 +458,43 @@ async function switchToRegistrationOverlayView() {
             }
             registrationViewer = new RegistrationViewer('registrationViewer');
         }
-        
+
         // Get the meshes from split viewers
         if (splitViewViewer && splitViewViewer.sourceViewer && splitViewViewer.targetViewer) {
-            const sourceMesh = splitViewViewer.sourceViewer.mesh;
-            const targetMesh = splitViewViewer.targetViewer.mesh;
-            
+            const sourceViewer = splitViewViewer.sourceViewer;
+            const targetViewer = splitViewViewer.targetViewer;
+
+            const sourceMesh = sourceViewer.mesh;
+            const targetMesh = targetViewer.mesh;
+
             if (sourceMesh && targetMesh) {
-                // Clone the meshes to add to registration viewer
-                // Use shallow clone to preserve materials while allowing independent transforms
-                const sourceClone = sourceMesh.clone();
-<<<<<<< HEAD
+                // CLEAR existing meshes from scene
+                if (registrationViewer.sourceMesh) registrationViewer.scene.remove(registrationViewer.sourceMesh);
+                if (registrationViewer.targetMesh) registrationViewer.scene.remove(registrationViewer.targetMesh);
+
+                // --- CLONE AND RESTORE WORLD COORDINATES ---
+                // The split view meshes have geometry centered at (0,0,0) and are scaled.
+                // We must restore them to their original World Space position/scale for correct alignment.
+                // Formula: P_world = Center + P_local / Scale (If we scaled down)
+                // Actually SplitViewViewer does: 
+                // geometry.translate(-C); scale=S;
+                // So displayed P = (P_orig - C) * S.
+                // To restore P_orig: P_orig = (P/S) + C.
+
+                // TARGET MESH (Reference)
+                // Clone the mesh (shares geometry)
                 const targetClone = targetMesh.clone();
-                
-                // Add to registration viewer scene
-                if (registrationViewer.scene) {
-                    // Remove any existing meshes first
-                    if (registrationViewer.sourceMesh) {
-                        registrationViewer.scene.remove(registrationViewer.sourceMesh);
-                    }
-                    if (registrationViewer.targetMesh) {
-                        registrationViewer.scene.remove(registrationViewer.targetMesh);
-                    }
-                    
-                    // Add cloned meshes
-                    registrationViewer.scene.add(sourceClone);
-                    registrationViewer.scene.add(targetClone);
-                    
-                    // Update references
-                    registrationViewer.sourceMesh = sourceClone;
-                    registrationViewer.targetMesh = targetClone;
-                    
-                    // Ensure meshes are visible with appropriate opacity
-=======
+                // Reset Rotation (crucial, as user might have rotated it)
+                targetClone.rotation.set(0, 0, 0);
+                // Reset Scale (it was scaled by S)
+                targetClone.scale.setScalar(1);
+                // Move Position to C (effectively undoing the geometry translation -C)
+                if (targetViewer.modelCenter) {
+                    targetClone.position.copy(targetViewer.modelCenter);
+                }
+
+                // SOURCE MESH (Transformed)
+                const sourceClone = sourceMesh.clone();
                 sourceClone.rotation.set(0, 0, 0);
                 sourceClone.scale.setScalar(1);
                 if (sourceViewer.modelCenter) {
@@ -516,45 +520,51 @@ async function switchToRegistrationOverlayView() {
                     sourceClone.applyMatrix4(m);
                 }
 
-                // Add to registration viewer scene
-                if (registrationViewer.scene) {
-                    registrationViewer.scene.add(sourceClone);
-                    registrationViewer.scene.add(targetClone);
+                // Add to registration viewer's unified rotation group
+                if (registrationViewer.scene && registrationViewer.rotationGroup) {
+                    // Clear previous group children
+                    while (registrationViewer.rotationGroup.children.length > 0) {
+                        registrationViewer.rotationGroup.remove(registrationViewer.rotationGroup.children[0]);
+                    }
+
+                    // --- Fix Rotation Pivot (REG-02.3) ---
+                    // By default, the group rotates around (0,0,0). 
+                    // If models are far from origin, they "orbit" instead of rotating in place.
+                    // Solution: Position the group at the model center, and offset the meshes locally.
+                    const pivot = targetViewer.modelCenter.clone();
+
+                    registrationViewer.rotationGroup.position.copy(pivot);
+                    registrationViewer.rotationGroup.rotation.set(0, 0, 0); // Reset for new registration
+
+                    // Adjust mesh positions to be relative to the group center (pivot)
+                    targetClone.position.sub(pivot); // Effectively (0,0,0) locally
+                    sourceClone.position.sub(pivot); // Transformed position relative to target center
+
+                    registrationViewer.rotationGroup.add(sourceClone);
+                    registrationViewer.rotationGroup.add(targetClone);
 
                     // Update references
                     registrationViewer.sourceMesh = sourceClone;
                     registrationViewer.targetMesh = targetClone;
-                    registrationViewer.selectedModel = 'source'; // Default selection
 
                     // Set visual properties
->>>>>>> parent of fda7241 (fix registration model rotation)
                     sourceClone.visible = true;
                     targetClone.visible = true;
-                    
                     if (sourceClone.material) sourceClone.material.opacity = 0.8;
                     if (targetClone.material) targetClone.material.opacity = 0.6;
-                    
-                    // Fit camera to show both models
-                    registrationViewer.fitCameraToObjects();
-<<<<<<< HEAD
-                    
-                    // Force a render
-                    registrationViewer.renderer.render(registrationViewer.scene, registrationViewer.camera);
-                    
-                    console.log('✓ Both models loaded in overlay view');
-                    showValidationMessage('Registration complete! Viewing combined models.', 'success');
-=======
 
-                    console.log('✓ Models restored to world coordinates and aligned');
-                    showValidationMessage('Registration complete! Viewing aligned models.', 'success');
->>>>>>> parent of fda7241 (fix registration model rotation)
+                    // Fit camera to show the restored world-space models
+                    registrationViewer.fitCameraToObjects();
+
+                    console.log('✓ Models added to unified rotation group with centered pivot');
+                    showValidationMessage('Registration complete! Rotating models as a unit.', 'success');
                 }
             }
         }
-        
-        // Trigger resize to ensure proper rendering
+
+        // Trigger resize
         window.dispatchEvent(new Event('resize'));
-        
+
     } catch (error) {
         console.error('Error switching to overlay view:', error);
         showValidationMessage('Error switching to overlay view: ' + error.message, 'error');
@@ -640,6 +650,24 @@ function setupRotationControls() {
         if (splitViewViewer) splitViewViewer.resetTargetRotation();
         if (registrationViewer) registrationViewer.resetTargetRotation();
     });
+
+    // Unified Overlay Rotation
+    const bindUnifiedRotate = (id, axis, dir) => {
+        document.getElementById(id)?.addEventListener('click', () => {
+            if (registrationViewer) registrationViewer.rotateAll(axis, rotationAmount * dir);
+        });
+    };
+
+    bindUnifiedRotate('overlayRotateXPos', 'x', 1);
+    bindUnifiedRotate('overlayRotateXNeg', 'x', -1);
+    bindUnifiedRotate('overlayRotateYPos', 'y', 1);
+    bindUnifiedRotate('overlayRotateYNeg', 'y', -1);
+    bindUnifiedRotate('overlayRotateZPos', 'z', 1);
+    bindUnifiedRotate('overlayRotateZNeg', 'z', -1);
+
+    document.getElementById('overlayResetRotation')?.addEventListener('click', () => {
+        if (registrationViewer) registrationViewer.resetRotation();
+    });
 }
 
 // Load 3D registration viewer (split view)
@@ -684,6 +712,10 @@ async function load3DViewer() {
 
         // Trigger resize to ensure canvases are properly sized
         window.dispatchEvent(new Event('resize'));
+
+        // Enable Manual Registration button
+        const manualRegBtn = document.getElementById('manualRegBtn');
+        if (manualRegBtn) manualRegBtn.disabled = false;
 
         console.log('3D viewers loaded successfully');
     } catch (error) {
@@ -804,6 +836,9 @@ function setupManualRegistrationUI() {
     const previewTransformBtn = document.getElementById('previewTransformBtn');
     const acceptTransformBtn = document.getElementById('acceptTransformBtn');
 
+    // Disable manual reg button initially
+    if (manualRegBtn) manualRegBtn.disabled = true;
+
     manualRegBtn.addEventListener('click', () => {
         manualModal.style.display = 'block';
     });
@@ -842,7 +877,6 @@ function setupManualRegistrationUI() {
             return;
         }
 
-        // Call backend to compute and apply transform
         try {
             // Show loading
             const computeBtn = document.getElementById('computeTransformBtn');
@@ -850,7 +884,7 @@ function setupManualRegistrationUI() {
             computeBtn.textContent = 'Registering...';
             computeBtn.disabled = true;
 
-            // Step 1: Compute transform
+            // Step 1: Compute transform (get R, t)
             const resp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/manual`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -860,107 +894,54 @@ function setupManualRegistrationUI() {
             if (!resp.ok) throw new Error(result.error || 'Compute failed');
 
             manualState.transform = result;
-            
-            // Step 2: Apply visual transform to the source mesh FIRST
-            if (splitViewViewer && splitViewViewer.sourceViewer) {
-                const sourceViewer = splitViewViewer.sourceViewer;
-                const mesh = sourceViewer.mesh;
-                
-                if (mesh && mesh.geometry) {
-                    try {
-                        const R = manualState.transform.rotation;
-                        const t = manualState.transform.translation;
 
-                        // Create transformation matrix
-                        const m = new THREE.Matrix4();
-                        m.set(
-                            R[0][0], R[0][1], R[0][2], t[0],
-                            R[1][0], R[1][1], R[1][2], t[1],
-                            R[2][0], R[2][1], R[2][2], t[2],
-                            0, 0, 0, 1
-                        );
-
-                        // Apply matrix to geometry to permanently transform it
-                        mesh.geometry.applyMatrix4(m);
-                        mesh.geometry.computeVertexNormals();
-                        mesh.geometry.computeBoundingBox();
-                        
-                        // Reset mesh transform properties
-                        mesh.position.set(0, 0, 0);
-                        mesh.rotation.set(0, 0, 0);
-                        mesh.scale.set(1, 1, 1);
-                        mesh.matrixAutoUpdate = true;
-                        mesh.updateMatrix();
-                        mesh.updateMatrixWorld(true);
-                        
-                        // Ensure mesh is visible
-                        mesh.visible = true;
-                        
-                        // Force trigger render on next frame
-                        sourceViewer.forceRender = true;
-                        
-                        console.log('✓ Mesh transformed and visible:', {
-                            visible: mesh.visible,
-                            position: mesh.position,
-                            parent: mesh.parent ? 'yes' : 'no'
-                        });
-                    } catch (transformError) {
-                        console.error('Error applying transform to mesh:', transformError);
-                        throw new Error('Failed to apply visual transform: ' + transformError.message);
-                    }
-                }
-            }
-
-            // Step 3: Save the registered model to backend
+            // Step 2: Save the registered model to backend
+            // (We do this now so the file exists, but we visualize using the computed matrix)
             const applyResp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/apply`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ source_path: selectedSource.file_path, rotation: manualState.transform.rotation, translation: manualState.transform.translation })
+                body: JSON.stringify({
+                    source_path: selectedSource.file_path,
+                    rotation: manualState.transform.rotation,
+                    translation: manualState.transform.translation
+                })
             });
+
             const applyResult = await applyResp.json();
             if (!applyResp.ok) throw new Error(applyResult.error || 'Save failed');
 
-<<<<<<< HEAD
-            // Step 4: Force re-render the viewers
-            if (splitViewViewer) {
-                if (splitViewViewer.sourceViewer && splitViewViewer.sourceViewer.renderer) {
-                    splitViewViewer.sourceViewer.renderer.render(
-                        splitViewViewer.sourceViewer.scene,
-                        splitViewViewer.sourceViewer.camera
-                    );
-                }
-                if (splitViewViewer.targetViewer && splitViewViewer.targetViewer.renderer) {
-                    splitViewViewer.targetViewer.renderer.render(
-                        splitViewViewer.targetViewer.scene,
-                        splitViewViewer.targetViewer.camera
-                    );
-                }
-            }
-=======
             console.log('Backend registration successful:', applyResult);
->>>>>>> parent of fda7241 (fix registration model rotation)
+
+            // Explicitly log the Coarse (Manual) RMSE as requested
+            console.log('=== MANUAL REGISTRATION RESULTS ===');
+            console.log(`RMSE (Coarse): ${result.rmse.toFixed(4)}`);
+            console.log('===================================');
 
             showValidationMessage(`✓ Registration successful! RMSE=${result.rmse.toFixed(3)}`, 'success');
-            
+
             // Restore button state
             computeBtn.textContent = originalText;
             computeBtn.disabled = true;
-            
+
             // Close modal and switch to combined overlay view
-            setTimeout(() => {
-                const manualModal = document.getElementById('manualRegModal');
-                if (manualModal) manualModal.style.display = 'none';
-                exitPickMode();
+            const manualModal = document.getElementById('manualRegModal');
+            if (manualModal) manualModal.style.display = 'none';
+            exitPickMode();
+
+            // Switch from split view to combined overlay view
+            try {
+                await switchToRegistrationOverlayView();
+                // Only clear points if switch was successful (or partially so)
                 clearManualPoints();
-                
-                // Switch from split view to combined overlay view
-                switchToRegistrationOverlayView();
-            }, 2000);
+            } catch (switchError) {
+                console.error("View switch failed:", switchError);
+                showValidationMessage('Registration saved, but view switch failed: ' + switchError.message, 'warning');
+            }
 
         } catch (err) {
             console.error('Registration error:', err);
             showValidationMessage('Error: ' + err.message, 'error');
-            
+
             // Restore button state on error
             const computeBtn = document.getElementById('computeTransformBtn');
             computeBtn.textContent = 'OK';
@@ -1022,13 +1003,13 @@ function exitPickMode() {
     if (splitViewViewer) {
         if (splitViewViewer.sourceViewer) {
             splitViewViewer.sourceViewer.renderer.render(
-                splitViewViewer.sourceViewer.scene, 
+                splitViewViewer.sourceViewer.scene,
                 splitViewViewer.sourceViewer.camera
             );
         }
         if (splitViewViewer.targetViewer) {
             splitViewViewer.targetViewer.renderer.render(
-                splitViewViewer.targetViewer.scene, 
+                splitViewViewer.targetViewer.scene,
                 splitViewViewer.targetViewer.camera
             );
         }
@@ -1129,7 +1110,8 @@ function clearManualPoints() {
     manualState.targetMarkers = [];
     manualState.previewApplied = false;
     manualState.originalSourceMatrix = null;
-    manualState.transform = null;
+    // DON'T clear transform - it's needed for ICP refinement!
+    // manualState.transform = null;
 
     document.getElementById('sourcePointsList').innerHTML = '';
     document.getElementById('targetPointsList').innerHTML = '';
@@ -1139,9 +1121,14 @@ function clearManualPoints() {
         splitViewViewer.targetViewer.clearMarkers();
     }
 
-    document.getElementById('computeTransformBtn').disabled = true;
-    document.getElementById('previewTransformBtn').disabled = true;
-    document.getElementById('acceptTransformBtn').disabled = true;
+    const computeBtn = document.getElementById('computeTransformBtn');
+    if (computeBtn) computeBtn.disabled = true;
+
+    const previewBtn = document.getElementById('previewTransformBtn');
+    if (previewBtn) previewBtn.disabled = true;
+
+    const acceptBtn = document.getElementById('acceptTransformBtn');
+    if (acceptBtn) acceptBtn.disabled = true;
 }
 
 function onPointPicked(side, threePoint) {
@@ -1206,7 +1193,7 @@ function setupOverlayControls() {
             const overlayControls = document.getElementById('overlayControlsPanel');
             const splitViewCont = document.getElementById('splitViewContainer');
             const viewerCtrls = document.getElementById('viewerControlsPanel');
-            
+
             if (viewerContainer) viewerContainer.style.display = 'none';
             if (overlayControls) overlayControls.style.display = 'none';
             if (splitViewCont) splitViewCont.style.display = 'flex';
@@ -1214,8 +1201,6 @@ function setupOverlayControls() {
         });
     }
 
-<<<<<<< HEAD
-=======
     // Add "Refine Alignment (ICP)" button if not present
     let refineBtn = document.getElementById('refineRegBtn');
     if (!refineBtn) {
@@ -1271,6 +1256,17 @@ function setupOverlayControls() {
                     const result = await resp.json();
                     if (!resp.ok) throw new Error(result.error || 'Refinement failed');
 
+                    // Calculate RMSE improvement
+                    const rmse_before = manualState.transform.rmse || 0;
+                    const rmse_after = result.rmse || 0;
+                    const improvement = rmse_before > 0 ? ((rmse_before - rmse_after) / rmse_before * 100).toFixed(1) : 0;
+
+                    console.log('=== ICP REFINEMENT RESULTS ===');
+                    console.log(`RMSE Before ICP: ${rmse_before.toFixed(4)}`);
+                    console.log(`RMSE After ICP:  ${rmse_after.toFixed(4)}`);
+                    console.log(`Improvement:     ${improvement}%`);
+                    console.log('==============================');
+
                     // Update state with REFINED transform
                     manualState.transform = {
                         rotation: result.rotation,
@@ -1279,7 +1275,7 @@ function setupOverlayControls() {
                     };
 
                     console.log('Refinement successful:', result);
-                    showValidationMessage(`Refined! RMSE improved to ${result.rmse.toFixed(3)}`, 'success');
+                    showValidationMessage(`Refined! RMSE: ${rmse_before.toFixed(3)} → ${rmse_after.toFixed(3)} (${improvement}% better)`, 'success');
 
                     // Update view
                     await switchToRegistrationOverlayView();
@@ -1309,7 +1305,6 @@ function setupOverlayControls() {
         }
     }
 
->>>>>>> parent of fda7241 (fix registration model rotation)
     if (toggleSourceBtn) {
         toggleSourceBtn.addEventListener('change', (e) => {
             if (registrationViewer && registrationViewer.sourceMesh) {
@@ -1361,8 +1356,8 @@ function setupOverlayControls() {
 }
 
 // Initialize when page loads
-window.addEventListener('DOMContentLoaded', () => { 
-    initRegistration(); 
-    setupManualRegistrationUI(); 
+window.addEventListener('DOMContentLoaded', () => {
+    initRegistration();
+    setupManualRegistrationUI();
     setupOverlayControls();
 });
