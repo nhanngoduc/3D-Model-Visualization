@@ -101,6 +101,7 @@ class IndependentModelViewer {
         this.onPointPick = null;
         this.modelCenter = null;
         this.modelScale = null;
+        this.modelSize = null; // Store model bounding box size for marker scaling
         this.markers = [];
         this.mouseDownTime = 0;
         this.mouseDownPos = { x: 0, y: 0 };
@@ -261,16 +262,15 @@ class IndependentModelViewer {
         if (intersects.length > 0) {
             const hitPoint = intersects[0].point.clone();
 
-            // Convert display hit point back to original model coordinates
-            // Use worldToLocal to handle Inverse Rotation and Scale automatically
-            const localPoint = intersects[0].point.clone();
-            this.mesh.worldToLocal(localPoint);
-
+            // Convert display hit point back to original model coordinates.
+            // Use mesh.worldToLocal to remove rotation/scale, then add model center.
             if (this.modelCenter) {
-                // Geometry was translated by -center, so we add center back
-                localPoint.add(this.modelCenter);
+                const localPoint = this.mesh.worldToLocal(hitPoint.clone());
+                const originalPoint = localPoint.add(this.modelCenter);
+                this.onPointPick(originalPoint);
+            } else {
+                this.onPointPick(hitPoint);
             }
-            this.onPointPick(localPoint);
         } else {
             console.warn("Pick Click detected but no intersection found.");
         }
@@ -320,6 +320,7 @@ class IndependentModelViewer {
             // Store mapping info for later (used to map display points back to original model coordinates)
             this.modelCenter = _center.clone();
             this.modelScale = _scale;
+            this.modelSize = _maxDim; // Store actual model size for marker scaling
 
             geometry.computeVertexNormals();
 
@@ -401,35 +402,32 @@ class IndependentModelViewer {
 
     // Markers for picked points
     addMarker(worldPosition, color = 0xff0000, label = null) {
-        if (!this.mesh) return null;
+        if (!this.scene) return null;
 
-        // Convert Real World Position -> Mesh Local Position (Geometry Space)
-        // because we will attach the marker to the mesh itself.
-        const localPos = worldPosition.clone();
+        // Convert world (original model) position to displayed coordinates
+        let displayPos = worldPosition.clone();
         if (this.modelCenter) {
-            localPos.sub(this.modelCenter);
+            displayPos.sub(this.modelCenter);
+        }
+        if (this.mesh) {
+            // Map local model coords into world, respecting current rotation/scale
+            displayPos = this.mesh.localToWorld(displayPos);
         }
 
-        const geometry = new THREE.SphereGeometry(0.05, 16, 16);
+        // Use a unit sphere and scale it to a constant screen-space size each frame
+        const geometry = new THREE.SphereGeometry(1, 16, 16);
         const material = new THREE.MeshBasicMaterial({
             color: color,
             depthTest: false, // Always show on top
             transparent: true
         });
         const marker = new THREE.Mesh(geometry, material);
+        marker.position.copy(displayPos);
+        marker.renderOrder = 999; // Render last
+        marker.userData.pixelRadius = 6; // desired on-screen radius in pixels
+        marker.userData.baseSpriteScale = new THREE.Vector3(0.4, 0.2, 1.0);
 
-        marker.position.copy(localPos);
-        marker.renderOrder = 999;
-
-        // Counter-scale the marker so it appears as a constant size 
-        // regardless of how much the model was scaled down
-        if (this.modelScale) {
-            const s = 1.0 / this.modelScale;
-            marker.scale.set(s, s, s);
-        }
-
-        // Attach to mesh so it rotates with the model!
-        this.mesh.add(marker);
+        this.scene.add(marker);
 
         // Add label if provided
         if (label) {
@@ -482,7 +480,7 @@ class IndependentModelViewer {
         });
         const sprite = new THREE.Sprite(spriteMaterial);
         sprite.renderOrder = 1000; // Render on top of marker
-        sprite.scale.set(0.4, 0.2, 1.0); // Slightly larger
+        sprite.scale.set(0.4, 0.2, 1.0); // Slightly larger (will be scaled with marker)
         return sprite;
     }
 
@@ -586,7 +584,37 @@ class IndependentModelViewer {
     animate() {
         requestAnimationFrame(() => this.animate());
         this.controls.update();
+        this.updateMarkerScales();
         this.renderer.render(this.scene, this.camera);
+    }
+
+    updateMarkerScales() {
+        if (!this.camera || !this.renderer || this.markers.length === 0) return;
+
+        const height = this.renderer.domElement.clientHeight || this.renderer.domElement.height;
+        if (!height) return;
+
+        // World units per pixel at a given distance from the camera
+        const vFov = THREE.MathUtils.degToRad(this.camera.fov);
+        for (const marker of this.markers) {
+            const worldPos = new THREE.Vector3();
+            marker.getWorldPosition(worldPos);
+            const distance = this.camera.position.distanceTo(worldPos);
+            const worldPerPixel = (2 * Math.tan(vFov / 2) * distance) / height;
+            const desiredWorldRadius = (marker.userData.pixelRadius || 6) * worldPerPixel;
+
+            // Geometry radius is 1, so scale == desired world radius
+            marker.scale.setScalar(desiredWorldRadius);
+
+            // Keep label size consistent with marker size
+            if (marker.children && marker.children.length > 0) {
+                for (const child of marker.children) {
+                    if (child.isSprite && marker.userData.baseSpriteScale) {
+                        child.scale.copy(marker.userData.baseSpriteScale).multiplyScalar(desiredWorldRadius);
+                    }
+                }
+            }
+        }
     }
 
     dispose() {
