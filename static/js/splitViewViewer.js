@@ -410,7 +410,7 @@ class IndependentModelViewer {
             localPos.sub(this.modelCenter);
         }
 
-        const geometry = new THREE.SphereGeometry(0.05, 16, 16);
+        const geometry = new THREE.SphereGeometry(1, 16, 16);
         const material = new THREE.MeshBasicMaterial({
             color: color,
             depthTest: false, // Always show on top
@@ -421,12 +421,8 @@ class IndependentModelViewer {
         marker.position.copy(localPos);
         marker.renderOrder = 999;
 
-        // Counter-scale the marker so it appears as a constant size 
-        // regardless of how much the model was scaled down
-        if (this.modelScale) {
-            const s = 1.0 / this.modelScale;
-            marker.scale.set(s, s, s);
-        }
+        marker.userData.pixelRadius = 6; // desired on-screen radius in pixels
+        marker.userData.baseSpriteScale = new THREE.Vector3(0.4, 0.2, 1.0);
 
         // Attach to mesh so it rotates with the model!
         this.mesh.add(marker);
@@ -504,7 +500,11 @@ class IndependentModelViewer {
 
     clearMarkers() {
         for (const m of this.markers) {
-            this.scene.remove(m);
+            if (m.parent) {
+                m.parent.remove(m);
+            } else {
+                this.scene.remove(m);
+            }
             if (m.geometry) m.geometry.dispose();
             if (m.material) m.material.dispose();
         }
@@ -586,7 +586,42 @@ class IndependentModelViewer {
     animate() {
         requestAnimationFrame(() => this.animate());
         this.controls.update();
+        this.updateMarkerScales();
         this.renderer.render(this.scene, this.camera);
+    }
+
+    updateMarkerScales() {
+        if (!this.camera || !this.renderer || this.markers.length === 0) return;
+
+        const height = this.renderer.domElement.clientHeight || this.renderer.domElement.height;
+        if (!height) return;
+
+        const vFov = THREE.MathUtils.degToRad(this.camera.fov);
+        for (const marker of this.markers) {
+            const worldPos = new THREE.Vector3();
+            marker.getWorldPosition(worldPos);
+            const distance = this.camera.position.distanceTo(worldPos);
+            const worldPerPixel = (2 * Math.tan(vFov / 2) * distance) / height;
+            const desiredWorldRadius = (marker.userData.pixelRadius || 6) * worldPerPixel;
+
+            // If marker is parented under a scaled mesh, compensate for parent scale
+            let parentScale = 1;
+            if (marker.parent) {
+                const s = new THREE.Vector3();
+                marker.parent.getWorldScale(s);
+                parentScale = (s.x + s.y + s.z) / 3 || 1;
+            }
+            const localRadius = desiredWorldRadius / parentScale;
+            marker.scale.setScalar(localRadius);
+
+            if (marker.children && marker.children.length > 0) {
+                for (const child of marker.children) {
+                    if (child.isSprite && marker.userData.baseSpriteScale) {
+                        child.scale.copy(marker.userData.baseSpriteScale).multiplyScalar(localRadius);
+                    }
+                }
+            }
+        }
     }
 
     dispose() {

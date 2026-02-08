@@ -10,6 +10,7 @@
     background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
     border-radius: 8px;
     overflow: hidden;
+    position: relative;
 }
 
 #registrationViewer {
@@ -57,6 +58,23 @@
     width: 2px;
     background: rgba(102, 126, 234, 0.4);
     cursor: col-resize;
+}
+
+/* ===== Manual Registration Modal ===== */
+.modal {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(560px, 90%);
+    background: rgba(20, 20, 30, 0.95);
+    border: 1px solid rgba(102, 126, 234, 0.4);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    color: #fff;
+    z-index: 2500;
+    backdrop-filter: blur(8px);
 }
 .model-selector {
     margin-bottom: 1.5rem;
