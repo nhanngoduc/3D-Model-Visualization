@@ -102,6 +102,7 @@ class IndependentModelViewer {
         this.modelCenter = null;
         this.modelScale = null;
         this.markers = [];
+        this._labelSprites = [];
         this.mouseDownTime = 0;
         this.mouseDownPos = { x: 0, y: 0 };
 
@@ -399,7 +400,7 @@ class IndependentModelViewer {
         this.controls.update();
     }
 
-    // Markers for picked points
+    // Markers for picked points (use camera-facing sprites like MeshLab)
     addMarker(worldPosition, color = 0xff0000, label = null) {
         if (!this.mesh) return null;
 
@@ -410,30 +411,77 @@ class IndependentModelViewer {
             localPos.sub(this.modelCenter);
         }
 
-        const geometry = new THREE.SphereGeometry(1, 16, 16);
-        const material = new THREE.MeshBasicMaterial({
-            color: color,
-            depthTest: false, // Always show on top
+        // Create a canvas-based sprite so the marker looks like MeshLab's 2D pick icons
+        const size = 64;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+
+        // Clear
+        ctx.clearRect(0, 0, size, size);
+
+        // Draw outer ring and filled center (MeshLab-like)
+        const cx = size / 2;
+        const cy = size / 2;
+        const radius = size * 0.14;
+
+        // thin white ring
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Fill inner circle with chosen color
+        ctx.fillStyle = (typeof color === 'number') ? `#${('000000' + color.toString(16)).slice(-6)}` : color;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * 0.55, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Create texture and sprite
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.needsUpdate = true;
+        const spriteMaterial = new THREE.SpriteMaterial({
+            map: tex,
+            depthTest: false,
+            depthWrite: false,
             transparent: true
         });
-        const marker = new THREE.Mesh(geometry, material);
+        const marker = new THREE.Sprite(spriteMaterial);
 
-        marker.position.copy(localPos);
+        // Convert local mesh-space position to world-space and add marker to scene (not parented to mesh)
+        const worldPos = localPos.clone();
+        this.mesh.localToWorld(worldPos);
+        marker.position.copy(worldPos);
+        // keep local mesh-space position so we can update marker if mesh moves (e.g., after registration)
+        marker.userData.localPos = localPos.clone();
+        marker.userData.attachedMesh = this.mesh;
         marker.renderOrder = 999;
 
-        marker.userData.pixelRadius = 6; // desired on-screen radius in pixels
-        marker.userData.baseSpriteScale = new THREE.Vector3(0.4, 0.2, 1.0);
+        // Desired on-screen radius in pixels (used by scaling routine)
+        // Make marker slightly smaller on screen to match MeshLab
+        marker.userData.pixelRadius = 6;
+        // Base scale in world units per pixel; used as a vector for sprites
+        marker.userData.baseSpriteScale = new THREE.Vector3(1, 1, 1);
+        // default label pixel height
+        marker.userData.labelPixelSize = 18;
 
-        // Attach to mesh so it rotates with the model!
-        this.mesh.add(marker);
+        // Add marker to scene (keeps consistent screen sizing and independent of parent scale)
+        this.scene.add(marker);
 
-        // Add label if provided
+        // Add numeric label as a separate sprite if provided
         if (label) {
             const sprite = this.createTextSprite(label);
-            if (sprite) {
-                sprite.position.set(0, 0.1, 0); // Offset above the point
-                marker.add(sprite); // Attach to marker so it moves with it
-            }
+                if (sprite) {
+                    // We'll keep label sprites in the scene (not as children) and update their world
+                    // position every frame so they remain readable and visible.
+                    sprite.userData.baseSpriteScale = new THREE.Vector3(0.35, 0.18, 1.0);
+                    sprite.userData.pixelSize = sprite.userData.pixelSize || 18;
+                    // store association for updates
+                    this._labelSprites.push({ marker: marker, sprite: sprite, offsetLocalY: radius * 0.9 });
+                    this.scene.add(sprite);
+                }
         }
 
         this.markers.push(marker);
@@ -442,43 +490,42 @@ class IndependentModelViewer {
 
     createTextSprite(message) {
         const fontface = "Arial";
-        const fontsize = 24;
-        const borderThickness = 2;
+        const fontsize = 36;
 
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
-        canvas.width = 128; // Power of 2
-        canvas.height = 64;
+        // Keep a small texture for crisp numbers
+        canvas.width = 128;
+        canvas.height = 128;
 
         context.font = "bold " + fontsize + "px " + fontface;
-
-        // Background
-        context.fillStyle = "rgba(0, 0, 0, 0.7)";
-        context.strokeStyle = "rgba(255, 255, 255, 0.8)";
-        context.lineWidth = borderThickness;
-
-        // Measure text
-        const metrics = context.measureText(message);
-        const textWidth = metrics.width;
-
-        // Draw background rounded rect
-        this.roundRect(context, 64 - textWidth / 2 - 10, 32 - fontsize / 2 - 5, textWidth + 20, fontsize + 10, 6);
-
-        // Text
-        context.fillStyle = "rgba(255, 255, 255, 1.0)";
         context.textAlign = "center";
         context.textBaseline = "middle";
-        context.fillText(message, 64, 32);
+
+        // Transparent background
+        context.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Draw stroke for readability
+        context.lineWidth = 6;
+        context.strokeStyle = 'rgba(0,0,0,0.9)';
+        context.strokeText(message, canvas.width / 2, canvas.height / 2);
+
+        // Draw fill
+        context.fillStyle = 'rgba(255,255,255,1.0)';
+        context.fillText(message, canvas.width / 2, canvas.height / 2);
 
         const texture = new THREE.CanvasTexture(canvas);
         const spriteMaterial = new THREE.SpriteMaterial({
             map: texture,
-            depthTest: false, // Always show on top
+            depthTest: false,
+            depthWrite: false,
             transparent: true
         });
         const sprite = new THREE.Sprite(spriteMaterial);
         sprite.renderOrder = 1000; // Render on top of marker
-        sprite.scale.set(0.4, 0.2, 1.0); // Slightly larger
+        sprite.userData.baseSpriteScale = new THREE.Vector3(0.4, 0.2, 1.0);
+        sprite.userData.isLabel = true;
+        sprite.userData.pixelSize = 18; // desired on-screen pixel height for label
         return sprite;
     }
 
@@ -509,6 +556,15 @@ class IndependentModelViewer {
             if (m.material) m.material.dispose();
         }
         this.markers = [];
+        // remove label sprites
+        for (const rec of this._labelSprites) {
+            const s = rec.sprite;
+            if (s.parent) s.parent.remove(s);
+            else this.scene.remove(s);
+            if (s.material) s.material.dispose();
+            if (s.geometry) s.geometry.dispose();
+        }
+        this._labelSprites = [];
     }
 
     rotateModel(axis, amount) {
@@ -598,6 +654,12 @@ class IndependentModelViewer {
 
         const vFov = THREE.MathUtils.degToRad(this.camera.fov);
         for (const marker of this.markers) {
+            // If this marker is attached to a mesh, update its world position in case the mesh moved
+            if (marker.userData && marker.userData.attachedMesh && marker.userData.localPos) {
+                const lp = marker.userData.localPos.clone();
+                marker.userData.attachedMesh.localToWorld(lp);
+                marker.position.copy(lp);
+            }
             const worldPos = new THREE.Vector3();
             marker.getWorldPosition(worldPos);
             const distance = this.camera.position.distanceTo(worldPos);
@@ -612,13 +674,46 @@ class IndependentModelViewer {
                 parentScale = (s.x + s.y + s.z) / 3 || 1;
             }
             const localRadius = desiredWorldRadius / parentScale;
-            marker.scale.setScalar(localRadius);
+
+            // If marker is sprite, use baseSpriteScale; otherwise set scalar (legacy support)
+            if (marker.isSprite) {
+                const base = marker.userData.baseSpriteScale || new THREE.Vector3(1, 1, 1);
+                marker.scale.copy(base).multiplyScalar(localRadius);
+            } else {
+                marker.scale.setScalar(localRadius);
+            }
 
             if (marker.children && marker.children.length > 0) {
                 for (const child of marker.children) {
-                    if (child.isSprite && marker.userData.baseSpriteScale) {
-                        child.scale.copy(marker.userData.baseSpriteScale).multiplyScalar(localRadius);
-                    }
+                        if (child.isSprite) {
+                            // If this child is a label sprite, keep it at a readable on-screen pixel size
+                            const labelPixelSize = child.userData.pixelSize || marker.userData.labelPixelSize || 18;
+                            const desiredWorldLabel = labelPixelSize * worldPerPixel;
+                            child.scale.set(desiredWorldLabel, desiredWorldLabel, 1.0);
+                        }
+                }
+            }
+
+            // Update any separate label sprites attached to this marker (kept in scene)
+            if (this._labelSprites && this._labelSprites.length > 0) {
+                const cameraUpWorld = this.camera.up.clone().applyQuaternion(this.camera.quaternion).normalize();
+                for (const rec of this._labelSprites) {
+                    if (rec.marker !== marker) continue;
+                    const worldPos = new THREE.Vector3();
+                    marker.getWorldPosition(worldPos);
+                    // position label a bit above in camera up direction
+                    const labelPixelSize = rec.sprite.userData.pixelSize || rec.marker.userData.labelPixelSize || 18;
+                    const desiredWorldLabel = labelPixelSize * worldPerPixel;
+                    // use desiredWorldRadius (computed above) which represents marker radius in world units
+                    const markerWorldRadius = desiredWorldRadius;
+                    const gap = desiredWorldLabel * 0.15;
+                    // place label just above the marker surface
+                    const offsetDist = markerWorldRadius + gap;
+                    const offset = cameraUpWorld.clone().multiplyScalar(offsetDist);
+                    rec.sprite.position.copy(worldPos).add(offset);
+                    rec.sprite.renderOrder = 1000;
+                    // set label world scale so text height matches pixel size
+                    rec.sprite.scale.set(desiredWorldLabel, desiredWorldLabel, 1.0);
                 }
             }
         }
