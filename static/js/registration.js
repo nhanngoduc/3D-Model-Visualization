@@ -872,8 +872,8 @@ function setupManualRegistrationUI() {
     }
 
     computeTransformBtn.addEventListener('click', async () => {
-        if (manualState.sourcePoints.length !== manualState.targetPoints.length || manualState.sourcePoints.length !== 4) {
-            alert('Please pick exactly 4 point pairs for manual registration');
+        if (manualState.sourcePoints.length !== manualState.targetPoints.length || manualState.sourcePoints.length < 3) {
+            alert('Please pick at least 3 matching point pairs for manual registration');
             return;
         }
 
@@ -1018,7 +1018,10 @@ function exitPickMode() {
     // Update button OK state based on current points
     const computeBtn = document.getElementById('computeTransformBtn');
     if (computeBtn) {
-        if (manualState.sourcePoints.length === 4 && manualState.targetPoints.length === 4) {
+        if (
+            manualState.sourcePoints.length === manualState.targetPoints.length &&
+            manualState.sourcePoints.length >= 3
+        ) {
             computeBtn.disabled = false;
             showValidationMessage('Ready! Click OK to register.', 'success');
         } else {
@@ -1040,7 +1043,7 @@ function undoLastPoint() {
     // If we have more source points, remove last source.
     // This assumes user roughly alternates or finishes one side.
 
-    const sLen = manualState.sourcePoints.length;
+    const sLen = manualState.sourcePoints.length; // keep count to display
     const tLen = manualState.targetPoints.length;
 
     if (sLen === 0 && tLen === 0) return;
@@ -1092,13 +1095,13 @@ function updatePickOverlayCounts() {
     const sCount = document.getElementById('sourcePickCount');
     const tCount = document.getElementById('targetPickCount');
     if (sCount) {
-        sCount.textContent = `${manualState.sourcePoints.length}/4`;
-        if (manualState.sourcePoints.length === 4) sCount.classList.add('done');
+        sCount.textContent = `${manualState.sourcePoints.length}`;
+        if (manualState.sourcePoints.length >= 3) sCount.classList.add('done');
         else sCount.classList.remove('done');
     }
     if (tCount) {
-        tCount.textContent = `${manualState.targetPoints.length}/4`;
-        if (manualState.targetPoints.length === 4) tCount.classList.add('done');
+        tCount.textContent = `${manualState.targetPoints.length}`;
+        if (manualState.targetPoints.length >= 3) tCount.classList.add('done');
         else tCount.classList.remove('done');
     }
 }
@@ -1135,10 +1138,6 @@ function onPointPicked(side, threePoint) {
     const arr = [threePoint.x, threePoint.y, threePoint.z];
 
     if (side === 'source') {
-        if (manualState.sourcePoints.length >= 4) {
-            showValidationMessage('Already picked 4 source points', 'warning');
-            return;
-        }
         manualState.sourcePoints.push(arr);
         const li = document.createElement('li');
         li.textContent = `(${arr.map(v => v.toFixed(3)).join(', ')})`;
@@ -1149,10 +1148,6 @@ function onPointPicked(side, threePoint) {
         const marker = splitViewViewer.sourceViewer.addMarker(threePoint, 0xff0000, label);
         manualState.sourceMarkers.push(marker);
     } else {
-        if (manualState.targetPoints.length >= 4) {
-            showValidationMessage('Already picked 4 target points', 'warning');
-            return;
-        }
         manualState.targetPoints.push(arr);
         const li = document.createElement('li');
         li.textContent = `(${arr.map(v => v.toFixed(3)).join(', ')})`;
@@ -1164,12 +1159,16 @@ function onPointPicked(side, threePoint) {
         manualState.targetMarkers.push(marker);
     }
 
-    // Enable compute when we have exactly 4 pairs
-    if (manualState.sourcePoints.length === 4 && manualState.targetPoints.length === 4) {
+    // Enable compute only when we have at least 3 matching pairs
+    const pairCount = Math.min(manualState.sourcePoints.length, manualState.targetPoints.length);
+    const hasValidPairs =
+        manualState.sourcePoints.length === manualState.targetPoints.length &&
+        pairCount >= 3;
+    if (hasValidPairs) {
         document.getElementById('computeTransformBtn').disabled = false;
-        showValidationMessage('4 points picked! Click OK to register.', 'success');
-        // Optional: Auto-exit pick mode?
-        // togglePickMode(); 
+        showValidationMessage(`${pairCount} point pair${pairCount > 1 ? 's' : ''} ready. Click OK to register.`, 'success');
+    } else {
+        document.getElementById('computeTransformBtn').disabled = true;
     }
 
     // Update overlay counts

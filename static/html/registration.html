@@ -190,7 +190,7 @@
 
                     <!-- Manual Registration -->
                     <button id="manualRegBtn" class="btn btn-secondary" disabled>
-                        Manual Registration (4-point)
+                        Manual Registration (>=3 points)
                     </button>
 
                     <!-- Next Step -->
@@ -318,9 +318,9 @@
 
                 <!-- Manual Registration Modal -->
                 <div id="manualRegModal" class="modal" style="display: none;">
-                    <h3 style="margin-top:0;">Manual Registration (4-point)</h3>
-                    <p style="font-size:0.9rem; color:#ccc;">Pick exactly 4 matching landmark pairs on Source and
-                        Target. Use the "Enter Pick Mode" button then click on the model.</p>
+                    <h3 style="margin-top:0;">Manual Registration (>=3 points)</h3>
+                    <p style="font-size:0.9rem; color:#ccc;">Pick at least 3 matching landmark pairs on Source and
+                        Target (no maximum). Use the "Enter Pick Mode" button then click on the model.</p>
                     <div style="display:flex; gap:12px; margin-bottom: 16px;">
                         <div style="flex:1;">
                             <h4 style="margin:4px 0">Source Points</h4>
@@ -365,9 +365,9 @@
                 <!-- REG-01.4: UX Improvement - Non-blocking Pick Mode Overlay -->
                 <div id="pickModeOverlay" style="display: none;">
                     <div class="pick-status">
-                        <span>Source: <span id="sourcePickCount" class="pick-count">0/4</span></span>
+                        <span>Source: <span id="sourcePickCount" class="pick-count">0</span></span>
                         <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.2);"></div>
-                        <span>Target: <span id="targetPickCount" class="pick-count">0/4</span></span>
+                        <span>Target: <span id="targetPickCount" class="pick-count">0</span></span>
                     </div>
                     <div style="display:flex; gap:10px;">
                         <button id="undoPickBtn" class="btn-finish"
