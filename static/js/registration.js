@@ -71,6 +71,17 @@ function ensureTransformVisualPose(stateTransform) {
     return visual;
 }
 
+function resetRegistrationTransformState(reason = 'context-change') {
+    if (window.manualState && window.manualState.transform) {
+        console.log('[State Reset] Clearing transform due to:', reason);
+    }
+    if (window.manualState) {
+        window.manualState.transform = null;
+        window.manualState.previewApplied = false;
+        window.manualState.originalSourceMatrix = null;
+    }
+}
+
 // Initialize
 async function initRegistration() {
     console.log('Initializing Registration module...');
@@ -247,14 +258,17 @@ function setupEventListeners() {
 
     // Source dropdowns
     sourcePatientSelect.addEventListener('change', (e) => {
+        resetRegistrationTransformState('source-patient-change');
         onSourcePatientChange(e.target.value);
     });
 
     sourceDataTypeSelect.addEventListener('change', (e) => {
+        resetRegistrationTransformState('source-datatype-change');
         onSourceDataTypeChange(e.target.value);
     });
 
     sourceModelSelect.addEventListener('change', (e) => {
+        resetRegistrationTransformState('source-model-change');
         selectedSource = e.target.value ? JSON.parse(e.target.value) : null;
         validateSelection();
         // If both selected and they point to the same file, allow proceeding with a warning
@@ -268,14 +282,17 @@ function setupEventListeners() {
 
     // Target dropdowns
     targetPatientSelect.addEventListener('change', (e) => {
+        resetRegistrationTransformState('target-patient-change');
         onTargetPatientChange(e.target.value);
     });
 
     targetDataTypeSelect.addEventListener('change', (e) => {
+        resetRegistrationTransformState('target-datatype-change');
         onTargetDataTypeChange(e.target.value);
     });
 
     targetModelSelect.addEventListener('change', (e) => {
+        resetRegistrationTransformState('target-model-change');
         selectedTarget = e.target.value ? JSON.parse(e.target.value) : null;
         validateSelection();
         // If both selected and they point to the same file, allow proceeding with a warning
@@ -384,6 +401,7 @@ function showValidationMessage(message, type) {
 
 // REG-01.3: Swap source and target
 function swapModels() {
+    resetRegistrationTransformState('swap-models');
     const sourcePatient = document.getElementById('sourcePatient');
     const sourceDataType = document.getElementById('sourceDataType');
     const sourceModel = document.getElementById('sourceModel');
@@ -475,6 +493,7 @@ async function proceedToViewer() {
 }
 
 function backToSelection() {
+    resetRegistrationTransformState('back-to-selection');
     const viewerControls = document.getElementById('viewerControlsPanel');
     const modelSelectionPanel = document.getElementById('modelSelectionPanel');
     const selectionView = document.getElementById('selectionView');
@@ -1180,15 +1199,16 @@ function updatePickOverlayCounts() {
     }
 }
 
-function clearManualPoints() {
+function clearManualPoints(preserveTransform = true) {
     manualState.sourcePoints = [];
     manualState.targetPoints = [];
     manualState.sourceMarkers = [];
     manualState.targetMarkers = [];
     manualState.previewApplied = false;
     manualState.originalSourceMatrix = null;
-    // DON'T clear transform - it's needed for ICP refinement!
-    // manualState.transform = null;
+    if (!preserveTransform) {
+        manualState.transform = null;
+    }
 
     document.getElementById('sourcePointsList').innerHTML = '';
     document.getElementById('targetPointsList').innerHTML = '';
@@ -1349,12 +1369,31 @@ function setupOverlayControls() {
                         translation: result.translation,
                         rmse: result.rmse,
                         fitness: result.fitness,
+                        overlap: result.overlap,
+                        center_dist: result.center_dist,
+                        low_confidence: result.low_confidence,
+                        quality_gate: result.quality_gate || null,
                         model_centers: manualState.transform?.model_centers || null
                     };
                     ensureTransformVisualPose(manualState.transform);
 
                     console.log('Refinement successful:', result);
-                    showValidationMessage(`Refined! RMSE: ${rmse_before.toFixed(3)} → ${rmse_after.toFixed(3)} (${improvement}% better)`, 'success');
+                    const gatePassed = result.quality_gate ? !!result.quality_gate.passed : true;
+                    const lowConfidence = !!result.low_confidence || !gatePassed;
+                    console.log(
+                        `[Refine Metrics] rmse=${(result.rmse ?? 0).toFixed?.(4) ?? result.rmse}, ` +
+                        `fitness=${(result.fitness ?? 0).toFixed?.(4) ?? result.fitness}, ` +
+                        `overlap=${result.overlap}, center_dist=${result.center_dist}, ` +
+                        `gate_passed=${gatePassed}, low_confidence=${lowConfidence}`
+                    );
+                    if (lowConfidence) {
+                        showValidationMessage(
+                            `Refine completed but still low confidence (RMSE ${rmse_after.toFixed(3)}).`,
+                            'warning'
+                        );
+                    } else {
+                        showValidationMessage(`Refined! RMSE: ${rmse_before.toFixed(3)} → ${rmse_after.toFixed(3)} (${improvement}% better)`, 'success');
+                    }
 
                     // Update view
                     await switchToRegistrationOverlayView();
@@ -1486,11 +1525,36 @@ async function performAutoRegistration() {
                 translation: result.translation,
                 rmse: result.rmse,
                 fitness: result.fitness,
+                overlap: result.overlap,
+                center_dist: result.center_dist,
+                low_confidence: result.low_confidence,
+                quality_gate: result.quality_gate || null,
                 model_centers: result.model_centers || null
             };
             ensureTransformVisualPose(manualState.transform);
 
-            alert(`Auto Registration Complete!\nRMSE: ${result.rmse.toFixed(4)}`);
+            const gatePassed = result.quality_gate ? !!result.quality_gate.passed : true;
+            const lowConfidence = !!result.low_confidence || !gatePassed;
+            console.log(
+                `[Auto Metrics] rmse=${(result.rmse ?? 0).toFixed?.(4) ?? result.rmse}, ` +
+                `fitness=${(result.fitness ?? 0).toFixed?.(4) ?? result.fitness}, ` +
+                `overlap=${result.overlap}, center_dist=${result.center_dist}, ` +
+                `gate_passed=${gatePassed}, low_confidence=${lowConfidence}`
+            );
+
+            if (lowConfidence) {
+                showValidationMessage(
+                    'Auto registration returned low-confidence alignment. Please run Refine ICP before saving.',
+                    'warning'
+                );
+                alert(
+                    `Auto Registration (Low Confidence)\n` +
+                    `RMSE: ${(result.rmse ?? 0).toFixed(4)}\n` +
+                    `Fitness: ${(result.fitness ?? 0).toFixed(4)}`
+                );
+            } else {
+                alert(`Auto Registration Complete!\nRMSE: ${result.rmse.toFixed(4)}`);
+            }
 
             // Switch to overlay view
             await switchToRegistrationOverlayView();

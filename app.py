@@ -895,6 +895,8 @@ def auto_register(patient_id):
             "translation": M_total[:3, 3].tolist(),
             "rmse": rmse_val,
             "fitness": fitness_val,
+            "overlap": float(chosen["overlap"]),
+            "center_dist": float(chosen["center_dist"]),
             "low_confidence": bool(low_confidence),
             "quality_gate": {
                 "rmse_max": float(rmse_gate),
@@ -922,7 +924,7 @@ def auto_register(patient_id):
 
 @app.route('/api/patient/<patient_id>/register/icp', methods=['POST'])
 def refine_icp(patient_id):
-    """Refine current alignment using Open3D Point-to-Plane ICP."""
+    """Refine current alignment using ROI-aware multiscale ICP."""
     try:
         import open3d as o3d
         
@@ -935,13 +937,6 @@ def refine_icp(patient_id):
         if not source_path or not target_path or curr_rot is None:
             return jsonify({"error": "Missing required data"}), 400
 
-        src_mesh = trimesh.load(os.path.join(ROOT_FOLDER, source_path), process=False)
-        dst_mesh = trimesh.load(os.path.join(ROOT_FOLDER, target_path), process=False)
-
-        # Convert to Open3D
-        source_pcd, _ = trimesh_to_open3d(src_mesh)
-        target_pcd, _ = trimesh_to_open3d(dst_mesh)
-        
         # Reconstruct current transform
         M_curr = np.eye(4)
         R_arr = np.array(curr_rot)
@@ -950,21 +945,77 @@ def refine_icp(patient_id):
             M_curr[:3, 3] = np.array(curr_trans)
         elif R_arr.shape == (4, 4):
             M_curr = R_arr
-            
-        # Adaptive voxel size
-        src_extent = np.max(source_pcd.get_max_bound() - source_pcd.get_min_bound())
-        voxel_size = max(src_extent * 0.005, 0.3)  # Finer for refinement
-        
-        # Point-to-Plane ICP refinement
-        result = refine_registration(source_pcd, target_pcd, voxel_size, M_curr)
-        
+
+        src_mesh = trimesh.load(os.path.join(ROOT_FOLDER, source_path), process=False)
+        dst_mesh = trimesh.load(os.path.join(ROOT_FOLDER, target_path), process=False)
+
+        # ROI-aware refine (match auto pipeline behavior for partial overlap)
+        src_extent = np.max(src_mesh.extents)
+        dst_extent = np.max(dst_mesh.extents)
+        source_is_jaw = dst_extent > src_extent * 1.5
+        target_is_jaw = src_extent > dst_extent * 1.5
+
+        src_ref = src_mesh
+        dst_ref = dst_mesh
+        if source_is_jaw:
+            src_for_roi = src_mesh.copy()
+            src_for_roi.apply_transform(M_curr)
+            dst_ref = extract_mouth_roi(dst_mesh, src_for_roi, distance_threshold=55.0)
+        elif target_is_jaw:
+            # Bring target jaw into source frame to crop source face ROI, then refine in original frames.
+            M_inv = np.linalg.inv(M_curr)
+            tgt_in_src = dst_mesh.copy()
+            tgt_in_src.apply_transform(M_inv)
+            src_ref = extract_mouth_roi(src_mesh, tgt_in_src, distance_threshold=55.0)
+
+        source_pcd, _ = trimesh_to_open3d(src_ref)
+        target_pcd, _ = trimesh_to_open3d(dst_ref)
+
+        # Adaptive voxel size (refinement)
+        roi_extent = max(np.max(src_ref.extents), np.max(dst_ref.extents))
+        voxel_size = max(roi_extent * 0.008, 0.4)
+
+        # Multiscale refine (stronger basin than single-stage point-to-plane)
+        result = refine_registration_multiscale(source_pcd, target_pcd, voxel_size, M_curr)
         M_final = np.array(result.transformation)
-        
+        rmse_val = float(result.inlier_rmse)
+        fitness_val = float(result.fitness)
+
+        quality = evaluate_alignment_quality(source_pcd, target_pcd, M_final, voxel_size)
+        src_center = np.asarray(source_pcd.points).mean(axis=0)
+        dst_center = np.asarray(target_pcd.points).mean(axis=0)
+        src_center_t = (M_final @ np.array([src_center[0], src_center[1], src_center[2], 1.0]))[:3]
+        center_dist = float(np.linalg.norm(src_center_t - dst_center))
+
+        rmse_gate = max(roi_extent * 0.015, 1.2)
+        fitness_gate = 0.20
+        quality_passed = (
+            (rmse_val <= rmse_gate) and
+            (fitness_val >= fitness_gate) and
+            (quality["overlap"] >= 0.30) and
+            (center_dist <= 40.0)
+        )
+        print(
+            f"Refine ICP: rmse={rmse_val:.4f}, fitness={fitness_val:.4f}, "
+            f"overlap={quality['overlap']:.4f}, center_dist={center_dist:.4f}, "
+            f"passed={quality_passed}"
+        )
+
         return jsonify({
             "rotation": M_final[:3, :3].tolist(),
             "translation": M_final[:3, 3].tolist(),
-            "rmse": float(result.inlier_rmse),
-            "fitness": float(result.fitness)
+            "rmse": rmse_val,
+            "fitness": fitness_val,
+            "overlap": float(quality["overlap"]),
+            "center_dist": center_dist,
+            "low_confidence": not bool(quality_passed),
+            "quality_gate": {
+                "rmse_max": float(rmse_gate),
+                "fitness_min": float(fitness_gate),
+                "overlap_min": 0.30,
+                "center_dist_max": 40.0,
+                "passed": bool(quality_passed)
+            }
         })
 
     except Exception as e:
