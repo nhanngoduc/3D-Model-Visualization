@@ -24,6 +24,15 @@ function buildRotationMatrix4(rotation3x3) {
     return m;
 }
 
+function getGlobalDisplayScale() {
+    if (!splitViewViewer || !splitViewViewer.sourceViewer || !splitViewViewer.targetViewer) return 1.0;
+    const sSrc = splitViewViewer.sourceViewer.modelScale || 1.0;
+    const sDst = splitViewViewer.targetViewer.modelScale || 1.0;
+    // Each viewer scale = 3 / maxDim. Use a single scale in overlay to keep registration-space mapping consistent.
+    // globalScale = 3 / max(maxDimSrc, maxDimDst) = min(sSrc, sDst)
+    return Math.min(sSrc, sDst);
+}
+
 function computeVisualPoseFromTransform(transform) {
     if (!splitViewViewer || !splitViewViewer.sourceViewer || !splitViewViewer.targetViewer) return null;
     if (!transform || !transform.rotation || !transform.translation) return null;
@@ -36,7 +45,7 @@ function computeVisualPoseFromTransform(transform) {
     // using sourceViewer/targetViewer.modelCenter, not backend mesh centers.
     const centerSrc = sourceViewer.modelCenter || new THREE.Vector3(0, 0, 0);
     const centerDst = targetViewer.modelCenter || new THREE.Vector3(0, 0, 0);
-    const targetScale = targetViewer.modelScale || 1.0;
+    const globalScale = getGlobalDisplayScale();
 
     const rotMat = buildRotationMatrix4(transform.rotation);
     const tGlobal = new THREE.Vector3(
@@ -45,12 +54,12 @@ function computeVisualPoseFromTransform(transform) {
         transform.translation[2]
     );
     const rotatedCenterSrc = centerSrc.clone().applyMatrix4(rotMat);
-    const tVisual = rotatedCenterSrc.add(tGlobal).sub(centerDst).multiplyScalar(targetScale);
+    const tVisual = rotatedCenterSrc.add(tGlobal).sub(centerDst).multiplyScalar(globalScale);
 
     return {
         rotation: transform.rotation,
         position: [tVisual.x, tVisual.y, tVisual.z],
-        scale: targetScale
+        scale: globalScale
     };
 }
 
@@ -537,13 +546,12 @@ async function switchToRegistrationOverlayView() {
                 // So displayed P = (P_orig - C) * S.
                 // To restore P_orig: P_orig = (P/S) + C.
 
-                // TARGET MESH (Reference) — use target's own scale
+                // TARGET MESH (Reference) — use unified overlay scale for both meshes
                 const targetClone = targetMesh.clone();
                 targetClone.rotation.set(0, 0, 0);
                 targetClone.position.set(0, 0, 0);
-                // Keep target at its own scale (geometry is centered, scale from splitView)
-                const S_dst = targetViewer.modelScale || 1.0;
-                targetClone.scale.setScalar(S_dst);
+                const S_global = getGlobalDisplayScale();
+                targetClone.scale.setScalar(S_global);
 
                 // SOURCE MESH (Transformed)
                 const sourceClone = sourceMesh.clone();
@@ -557,19 +565,29 @@ async function switchToRegistrationOverlayView() {
                     const visualPose = ensureTransformVisualPose(manualState.transform);
                     if (visualPose) {
                         const rotMat = buildRotationMatrix4(visualPose.rotation);
-                        sourceClone.scale.setScalar(visualPose.scale || S_dst);
+                        const t = manualState.transform.translation || [0, 0, 0];
+                        const centerSrc = sourceViewer.modelCenter || new THREE.Vector3(0, 0, 0);
+                        const centerDst = targetViewer.modelCenter || new THREE.Vector3(0, 0, 0);
+                        sourceClone.scale.setScalar(visualPose.scale || S_global);
                         sourceClone.setRotationFromMatrix(rotMat);
                         sourceClone.position.set(
                             visualPose.position[0],
                             visualPose.position[1],
                             visualPose.position[2]
                         );
+
+                        const srcCenterVis = centerSrc.clone().applyMatrix4(rotMat).add(
+                            new THREE.Vector3(t[0], t[1], t[2])
+                        );
+                        const centerDistanceMm = srcCenterVis.distanceTo(centerDst);
+                        console.log('[Overlay Mapping Check] globalScale=', (visualPose.scale || S_global));
+                        console.log('[Overlay Mapping Check] center distance (mm)=', centerDistanceMm.toFixed(3));
                     } else {
-                        sourceClone.scale.setScalar(S_dst);
+                        sourceClone.scale.setScalar(S_global);
                     }
                 } else {
                     // No transform, just use same scale
-                    sourceClone.scale.setScalar(S_dst);
+                    sourceClone.scale.setScalar(S_global);
                 }
 
                 // Add to registration viewer's unified rotation group

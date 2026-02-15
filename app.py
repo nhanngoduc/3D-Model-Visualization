@@ -249,8 +249,8 @@ def api_apply_registration(patient_id):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/patient/<string:patient_id>/register/icp', methods=['POST'])
-def register_icp(patient_id):
+@app.route('/api/patient/<string:patient_id>/register/icp_trimesh_legacy', methods=['POST'])
+def register_icp_legacy(patient_id):
     try:
         data = request.json
         full_source = os.path.join(ROOT_FOLDER, data.get('source_path', ''))
