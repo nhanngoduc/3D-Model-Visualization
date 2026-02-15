@@ -597,6 +597,65 @@ def build_local_init_candidates_around_centroid(source_pcd, angle_deg_list, z_of
     return candidates
 
 
+def build_refine_seed_transforms(base_M):
+    """
+    Small perturbations around current transform to escape local minima.
+    """
+    seeds = [np.array(base_M, dtype=float)]
+
+    rot_perturbs = [
+        (8.0, 0.0, 0.0), (-8.0, 0.0, 0.0),
+        (0.0, 8.0, 0.0), (0.0, -8.0, 0.0),
+        (0.0, 0.0, 12.0), (0.0, 0.0, -12.0),
+    ]
+    trans_perturbs = [
+        (0.0, 0.0, 8.0), (0.0, 0.0, -8.0),
+        (5.0, 0.0, 0.0), (-5.0, 0.0, 0.0),
+        (0.0, 5.0, 0.0), (0.0, -5.0, 0.0),
+    ]
+
+    for ax, ay, az in rot_perturbs:
+        P = np.eye(4)
+        P[:3, :3] = _euler_xyz_to_matrix(ax, ay, az)
+        seeds.append(P @ base_M)
+
+    for tx, ty, tz in trans_perturbs:
+        P = np.eye(4)
+        P[:3, 3] = np.array([tx, ty, tz], dtype=float)
+        seeds.append(P @ base_M)
+
+    return seeds
+
+
+def estimate_similarity_umeyama(X, Y):
+    """
+    Estimate similarity transform Y ~= s * R * X + t for paired points.
+    Returns (s, R, t).
+    """
+    X = np.asarray(X, dtype=float)
+    Y = np.asarray(Y, dtype=float)
+    if len(X) < 3 or len(Y) < 3:
+        return 1.0, np.eye(3), np.zeros(3)
+
+    mx = X.mean(axis=0)
+    my = Y.mean(axis=0)
+    Xc = X - mx
+    Yc = Y - my
+    cov = (Yc.T @ Xc) / len(X)
+    U, D, Vt = np.linalg.svd(cov)
+    S = np.eye(3)
+    if np.linalg.det(U @ Vt) < 0:
+        S[-1, -1] = -1
+    R = U @ S @ Vt
+    var_x = np.mean(np.sum(Xc ** 2, axis=1))
+    if var_x < 1e-12:
+        s = 1.0
+    else:
+        s = np.trace(np.diag(D) @ S) / var_x
+    t = my - s * (R @ mx)
+    return float(s), R, t
+
+
 def rank_init_candidates_fast(source_pcd, target_pcd, init_candidates, voxel_size, top_k=10):
     """
     Fast first-pass ranking of init transforms to avoid expensive full ICP on all seeds.
@@ -949,56 +1008,101 @@ def refine_icp(patient_id):
         src_mesh = trimesh.load(os.path.join(ROOT_FOLDER, source_path), process=False)
         dst_mesh = trimesh.load(os.path.join(ROOT_FOLDER, target_path), process=False)
 
-        # ROI-aware refine (match auto pipeline behavior for partial overlap)
         src_extent = np.max(src_mesh.extents)
         dst_extent = np.max(dst_mesh.extents)
         source_is_jaw = dst_extent > src_extent * 1.5
         target_is_jaw = src_extent > dst_extent * 1.5
 
-        src_ref = src_mesh
-        dst_ref = dst_mesh
-        if source_is_jaw:
-            src_for_roi = src_mesh.copy()
-            src_for_roi.apply_transform(M_curr)
-            dst_ref = extract_mouth_roi(dst_mesh, src_for_roi, distance_threshold=55.0)
-        elif target_is_jaw:
-            # Bring target jaw into source frame to crop source face ROI, then refine in original frames.
-            M_inv = np.linalg.inv(M_curr)
-            tgt_in_src = dst_mesh.copy()
-            tgt_in_src.apply_transform(M_inv)
-            src_ref = extract_mouth_roi(src_mesh, tgt_in_src, distance_threshold=55.0)
+        def run_branch(use_roi):
+            src_ref = src_mesh
+            dst_ref = dst_mesh
+            if use_roi and source_is_jaw:
+                src_for_roi = src_mesh.copy()
+                src_for_roi.apply_transform(M_curr)
+                dst_ref = extract_mouth_roi(dst_mesh, src_for_roi, distance_threshold=55.0)
+            elif use_roi and target_is_jaw:
+                M_inv = np.linalg.inv(M_curr)
+                tgt_in_src = dst_mesh.copy()
+                tgt_in_src.apply_transform(M_inv)
+                src_ref = extract_mouth_roi(src_mesh, tgt_in_src, distance_threshold=55.0)
 
-        source_pcd, _ = trimesh_to_open3d(src_ref)
-        target_pcd, _ = trimesh_to_open3d(dst_ref)
+            source_pcd, _ = trimesh_to_open3d(src_ref)
+            target_pcd, _ = trimesh_to_open3d(dst_ref)
+            roi_extent = max(np.max(src_ref.extents), np.max(dst_ref.extents))
+            voxel_size = max(roi_extent * 0.008, 0.4)
 
-        # Adaptive voxel size (refinement)
-        roi_extent = max(np.max(src_ref.extents), np.max(dst_ref.extents))
-        voxel_size = max(roi_extent * 0.008, 0.4)
+            seeds = build_refine_seed_transforms(M_curr)
+            best = None
+            for i, seed_M in enumerate(seeds):
+                res_i = refine_registration_multiscale(source_pcd, target_pcd, voxel_size, seed_M)
+                M_i = np.array(res_i.transformation)
+                rmse_i = float(res_i.inlier_rmse)
+                fitness_i = float(res_i.fitness)
+                quality_i = evaluate_alignment_quality(source_pcd, target_pcd, M_i, voxel_size)
+                src_center = np.asarray(source_pcd.points).mean(axis=0)
+                dst_center = np.asarray(target_pcd.points).mean(axis=0)
+                src_center_t = (M_i @ np.array([src_center[0], src_center[1], src_center[2], 1.0]))[:3]
+                center_dist_i = float(np.linalg.norm(src_center_t - dst_center))
 
-        # Multiscale refine (stronger basin than single-stage point-to-plane)
-        result = refine_registration_multiscale(source_pcd, target_pcd, voxel_size, M_curr)
-        M_final = np.array(result.transformation)
-        rmse_val = float(result.inlier_rmse)
-        fitness_val = float(result.fitness)
+                score_i = (
+                    (0.35 * quality_i["median_sym"] + 0.45 * quality_i["p90_sym"] + 0.20 * rmse_i)
+                    / (max(quality_i["overlap"], 1e-3) ** 1.2)
+                    / (max(fitness_i, 1e-2) ** 0.25)
+                    + 0.08 * center_dist_i
+                )
 
-        quality = evaluate_alignment_quality(source_pcd, target_pcd, M_final, voxel_size)
-        src_center = np.asarray(source_pcd.points).mean(axis=0)
-        dst_center = np.asarray(target_pcd.points).mean(axis=0)
-        src_center_t = (M_final @ np.array([src_center[0], src_center[1], src_center[2], 1.0]))[:3]
-        center_dist = float(np.linalg.norm(src_center_t - dst_center))
+                rmse_gate_i = max(roi_extent * 0.015, 1.2)
+                quality_pass_i = (
+                    (rmse_i <= rmse_gate_i) and
+                    (fitness_i >= 0.20) and
+                    (quality_i["overlap"] >= 0.30) and
+                    (center_dist_i <= 40.0)
+                )
+                candidate = {
+                    "M": M_i,
+                    "rmse": rmse_i,
+                    "fitness": fitness_i,
+                    "overlap": float(quality_i["overlap"]),
+                    "center_dist": center_dist_i,
+                    "score": float(score_i),
+                    "quality_passed": bool(quality_pass_i),
+                    "rmse_gate": float(rmse_gate_i),
+                    "roi_extent": float(roi_extent),
+                    "seed_index": int(i),
+                }
+                if best is None:
+                    best = candidate
+                else:
+                    # Prefer gate-pass candidates first, then lower score
+                    if candidate["quality_passed"] and not best["quality_passed"]:
+                        best = candidate
+                    elif candidate["quality_passed"] == best["quality_passed"] and candidate["score"] < best["score"]:
+                        best = candidate
 
-        rmse_gate = max(roi_extent * 0.015, 1.2)
-        fitness_gate = 0.20
-        quality_passed = (
-            (rmse_val <= rmse_gate) and
-            (fitness_val >= fitness_gate) and
-            (quality["overlap"] >= 0.30) and
-            (center_dist <= 40.0)
-        )
+            best["branch"] = "roi" if use_roi else "full"
+            return best
+
+        roi_branch = run_branch(use_roi=True)
+        full_branch = run_branch(use_roi=False)
+
+        # Choose branch: gate-pass priority, then score
+        chosen = roi_branch
+        if full_branch["quality_passed"] and not roi_branch["quality_passed"]:
+            chosen = full_branch
+        elif full_branch["quality_passed"] == roi_branch["quality_passed"] and full_branch["score"] < roi_branch["score"]:
+            chosen = full_branch
+
+        M_final = chosen["M"]
+        rmse_val = chosen["rmse"]
+        fitness_val = chosen["fitness"]
+        overlap_val = chosen["overlap"]
+        center_dist = chosen["center_dist"]
+        quality_passed = chosen["quality_passed"]
+
         print(
-            f"Refine ICP: rmse={rmse_val:.4f}, fitness={fitness_val:.4f}, "
-            f"overlap={quality['overlap']:.4f}, center_dist={center_dist:.4f}, "
-            f"passed={quality_passed}"
+            f"Refine ICP: branch={chosen['branch']}, seed={chosen['seed_index']}, "
+            f"rmse={rmse_val:.4f}, fitness={fitness_val:.4f}, "
+            f"overlap={overlap_val:.4f}, center_dist={center_dist:.4f}, passed={quality_passed}"
         )
 
         return jsonify({
@@ -1006,12 +1110,14 @@ def refine_icp(patient_id):
             "translation": M_final[:3, 3].tolist(),
             "rmse": rmse_val,
             "fitness": fitness_val,
-            "overlap": float(quality["overlap"]),
+            "overlap": overlap_val,
             "center_dist": center_dist,
             "low_confidence": not bool(quality_passed),
+            "refine_branch": chosen["branch"],
+            "seed_index": int(chosen["seed_index"]),
             "quality_gate": {
-                "rmse_max": float(rmse_gate),
-                "fitness_min": float(fitness_gate),
+                "rmse_max": float(chosen["rmse_gate"]),
+                "fitness_min": 0.20,
                 "overlap_min": 0.30,
                 "center_dist_max": 40.0,
                 "passed": bool(quality_passed)
@@ -1020,6 +1126,71 @@ def refine_icp(patient_id):
 
     except Exception as e:
         print(f"Refinement Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/patient/<patient_id>/register/similarity-check', methods=['POST'])
+def similarity_check(patient_id):
+    """
+    Quick scale-drift diagnostic: estimate similarity scale between source and target.
+    """
+    try:
+        data = request.json or {}
+        source_path = data.get('source_path')
+        target_path = data.get('target_path')
+        init_rot = data.get('rotation')
+        init_trans = data.get('translation')
+
+        if not source_path or not target_path:
+            return jsonify({"error": "Missing source_path or target_path"}), 400
+
+        src_mesh = trimesh.load(os.path.join(ROOT_FOLDER, source_path), process=False)
+        dst_mesh = trimesh.load(os.path.join(ROOT_FOLDER, target_path), process=False)
+
+        src_pts = np.asarray(src_mesh.vertices)
+        dst_pts = np.asarray(dst_mesh.vertices)
+        if len(src_pts) == 0 or len(dst_pts) == 0:
+            return jsonify({"error": "Empty mesh vertices"}), 400
+
+        # Optional rigid init to improve nearest-neighbor pairing.
+        if init_rot is not None:
+            M = np.eye(4)
+            R_arr = np.array(init_rot, dtype=float)
+            if R_arr.shape == (3, 3):
+                M[:3, :3] = R_arr
+                M[:3, 3] = np.array(init_trans if init_trans is not None else [0, 0, 0], dtype=float)
+                src_pts = (M[:3, :3] @ src_pts.T).T + M[:3, 3]
+
+        # Subsample for speed
+        rng = np.random.default_rng(42)
+        n_src = min(8000, len(src_pts))
+        n_dst = min(15000, len(dst_pts))
+        src_sub = src_pts[rng.choice(len(src_pts), n_src, replace=False)]
+        dst_sub = dst_pts[rng.choice(len(dst_pts), n_dst, replace=False)]
+
+        # Pair each source point to nearest target point
+        import open3d as o3d
+        dst_pcd = o3d.geometry.PointCloud()
+        dst_pcd.points = o3d.utility.Vector3dVector(dst_sub)
+        kdt = o3d.geometry.KDTreeFlann(dst_pcd)
+        nn = []
+        for p in src_sub:
+            _, idx, _ = kdt.search_knn_vector_3d(p, 1)
+            nn.append(dst_sub[idx[0]])
+        nn = np.asarray(nn)
+
+        s, R, t = estimate_similarity_umeyama(src_sub, nn)
+        drift = abs(s - 1.0)
+        return jsonify({
+            "scale": float(s),
+            "scale_drift": float(drift),
+            "likely_scale_mismatch": bool(drift > 0.03),
+            "sample_size": int(len(src_sub))
+        })
+    except Exception as e:
+        print(f"Similarity Check Error: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

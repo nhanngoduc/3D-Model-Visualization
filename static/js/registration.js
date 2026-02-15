@@ -71,12 +71,43 @@ function ensureTransformVisualPose(stateTransform) {
     return visual;
 }
 
+function ensureRegistrationDebugPanel() {
+    const panel = document.getElementById('overlayControlsPanel');
+    if (!panel) return null;
+    let debug = document.getElementById('registrationDebugPanel');
+    if (!debug) {
+        debug = document.createElement('div');
+        debug.id = 'registrationDebugPanel';
+        debug.style.cssText = 'margin-top:10px;padding:10px;border:1px solid rgba(255,255,255,0.15);border-radius:8px;background:rgba(255,255,255,0.04);font-size:12px;line-height:1.45;white-space:pre-wrap;';
+        panel.appendChild(debug);
+    }
+    return debug;
+}
+
+function updateRegistrationDebugPanel(title, metrics) {
+    const debug = ensureRegistrationDebugPanel();
+    if (!debug) return;
+    const gate = metrics?.quality_gate || {};
+    debug.textContent =
+`[${title}]
+rmse=${metrics?.rmse}
+fitness=${metrics?.fitness}
+overlap=${metrics?.overlap}
+center_dist=${metrics?.center_dist}
+best_strategy=${metrics?.best_strategy ?? '-'}
+best_seed_index=${metrics?.best_seed_index ?? metrics?.seed_index ?? '-'}
+refine_branch=${metrics?.refine_branch ?? '-'}
+gate_passed=${gate?.passed}
+low_confidence=${metrics?.low_confidence}`;
+}
+
 function resetRegistrationTransformState(reason = 'context-change') {
     if (window.manualState && window.manualState.transform) {
         console.log('[State Reset] Clearing transform due to:', reason);
     }
     if (window.manualState) {
         window.manualState.transform = null;
+        window.manualState.candidateTransform = null;
         window.manualState.previewApplied = false;
         window.manualState.originalSourceMatrix = null;
     }
@@ -911,6 +942,7 @@ const manualState = {
     targetPoints: [],
     sourceMarkers: [],
     targetMarkers: [],
+    candidateTransform: null,
     previewApplied: false,
     originalSourceMatrix: null,
     transform: null
@@ -1204,6 +1236,7 @@ function clearManualPoints(preserveTransform = true) {
     manualState.targetPoints = [];
     manualState.sourceMarkers = [];
     manualState.targetMarkers = [];
+    manualState.candidateTransform = null;
     manualState.previewApplied = false;
     manualState.originalSourceMatrix = null;
     if (!preserveTransform) {
@@ -1278,6 +1311,7 @@ function setupOverlayControls() {
     const targetOpacitySlider = document.getElementById('overlayTargetOpacity');
     const cameraPresetSelect = document.getElementById('overlayCameraPreset');
     const finishBtn = document.getElementById('finishRegBtn');
+    ensureRegistrationDebugPanel();
 
     if (backBtn) {
         backBtn.addEventListener('click', () => {
@@ -1364,7 +1398,7 @@ function setupOverlayControls() {
                     console.log('==============================');
 
                     // Update state with REFINED transform
-                    manualState.transform = {
+                    const refinedCandidate = {
                         rotation: result.rotation,
                         translation: result.translation,
                         rmse: result.rmse,
@@ -1375,7 +1409,7 @@ function setupOverlayControls() {
                         quality_gate: result.quality_gate || null,
                         model_centers: manualState.transform?.model_centers || null
                     };
-                    ensureTransformVisualPose(manualState.transform);
+                    ensureTransformVisualPose(refinedCandidate);
 
                     console.log('Refinement successful:', result);
                     const gatePassed = result.quality_gate ? !!result.quality_gate.passed : true;
@@ -1386,28 +1420,32 @@ function setupOverlayControls() {
                         `overlap=${result.overlap}, center_dist=${result.center_dist}, ` +
                         `gate_passed=${gatePassed}, low_confidence=${lowConfidence}`
                     );
+                    updateRegistrationDebugPanel('Refine', result);
                     if (lowConfidence) {
+                        manualState.candidateTransform = refinedCandidate;
                         showValidationMessage(
-                            `Refine completed but still low confidence (RMSE ${rmse_after.toFixed(3)}).`,
+                            `Refine alignment failed quality gate (RMSE ${rmse_after.toFixed(3)}). Please provide manual seed.`,
                             'warning'
                         );
                     } else {
-                        showValidationMessage(`Refined! RMSE: ${rmse_before.toFixed(3)} → ${rmse_after.toFixed(3)} (${improvement}% better)`, 'success');
+                        manualState.transform = refinedCandidate;
+                        manualState.candidateTransform = null;
+                        showValidationMessage(`Refined! RMSE: ${rmse_before.toFixed(3)} -> ${rmse_after.toFixed(3)} (${improvement}% better)`, 'success');
+
+                        // Update view only for committed transform
+                        await switchToRegistrationOverlayView();
+
+                        // Save only when quality gate passes
+                        await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/apply`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                source_path: selectedSource.file_path,
+                                rotation: result.rotation,
+                                translation: result.translation
+                            })
+                        });
                     }
-
-                    // Update view
-                    await switchToRegistrationOverlayView();
-
-                    // Also update the SAVED file on backend
-                    await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/apply`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            source_path: selectedSource.file_path,
-                            rotation: result.rotation,
-                            translation: result.translation
-                        })
-                    });
 
                 } catch (err) {
                     console.error('Refinement error:', err);
@@ -1519,8 +1557,7 @@ async function performAutoRegistration() {
                 throw new Error("Invalid response from server: rotation or translation missing");
             }
 
-            // Sync with window.manualState for consistency
-            manualState.transform = {
+            const autoCandidate = {
                 rotation: result.rotation,
                 translation: result.translation,
                 rmse: result.rmse,
@@ -1531,7 +1568,7 @@ async function performAutoRegistration() {
                 quality_gate: result.quality_gate || null,
                 model_centers: result.model_centers || null
             };
-            ensureTransformVisualPose(manualState.transform);
+            ensureTransformVisualPose(autoCandidate);
 
             const gatePassed = result.quality_gate ? !!result.quality_gate.passed : true;
             const lowConfidence = !!result.low_confidence || !gatePassed;
@@ -1541,10 +1578,12 @@ async function performAutoRegistration() {
                 `overlap=${result.overlap}, center_dist=${result.center_dist}, ` +
                 `gate_passed=${gatePassed}, low_confidence=${lowConfidence}`
             );
+            updateRegistrationDebugPanel('Auto', result);
 
             if (lowConfidence) {
+                manualState.candidateTransform = autoCandidate;
                 showValidationMessage(
-                    'Auto registration returned low-confidence alignment. Please run Refine ICP before saving.',
+                    'Auto registration failed quality gate. Please provide manual seed points.',
                     'warning'
                 );
                 alert(
@@ -1553,11 +1592,12 @@ async function performAutoRegistration() {
                     `Fitness: ${(result.fitness ?? 0).toFixed(4)}`
                 );
             } else {
+                manualState.transform = autoCandidate;
+                manualState.candidateTransform = null;
                 alert(`Auto Registration Complete!\nRMSE: ${result.rmse.toFixed(4)}`);
+                // Switch to overlay view only when gate passes
+                await switchToRegistrationOverlayView();
             }
-
-            // Switch to overlay view
-            await switchToRegistrationOverlayView();
         } else {
             alert(`Auto Registration Failed: ${result.error || 'Unknown error'}`);
         }
@@ -1571,3 +1611,4 @@ async function performAutoRegistration() {
         if (autoRegBtn) autoRegBtn.disabled = false;
     }
 }
+
