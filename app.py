@@ -466,7 +466,7 @@ def execute_global_registration(source_down, target_down, source_fpfh, target_fp
     
     result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
         source_down, target_down, source_fpfh, target_fpfh,
-        mutual_filter=True,
+        mutual_filter=False,
         max_correspondence_distance=distance_threshold,
         estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
         ransac_n=4,
@@ -504,17 +504,24 @@ def refine_registration(source, target, voxel_size, init_transform):
 def refine_registration_multiscale(source, target, voxel_size, init_transform):
     import open3d as o3d
 
-    thresholds = [voxel_size * 2.0, voxel_size * 1.0, voxel_size * 0.5]
-    iterations = [100, 140, 200]
+    # Coarse-to-fine with wider capture range to avoid zero-correspondence local minima.
+    thresholds = [voxel_size * 6.0, voxel_size * 3.0, voxel_size * 1.5]
+    iterations = [120, 160, 220]
 
     M = np.array(init_transform, dtype=float)
     final_result = None
-    for dist_th, max_iter in zip(thresholds, iterations):
+    for stage_idx, (dist_th, max_iter) in enumerate(zip(thresholds, iterations)):
+        # First two stages: point-to-point (more robust capture).
+        # Final stage: point-to-plane (higher local accuracy).
+        if stage_idx < 2:
+            est = o3d.pipelines.registration.TransformationEstimationPointToPoint(False)
+        else:
+            est = o3d.pipelines.registration.TransformationEstimationPointToPlane()
         final_result = o3d.pipelines.registration.registration_icp(
             source, target,
             dist_th,
             M,
-            o3d.pipelines.registration.TransformationEstimationPointToPlane(),
+            est,
             o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
         )
         M = np.array(final_result.transformation)
@@ -564,6 +571,61 @@ def evaluate_alignment_quality(source_pcd, target_pcd, transform, voxel_size):
         "overlap": float(overlap)
     }
 
+
+def build_local_init_candidates_around_centroid(source_pcd, angle_deg_list, z_offsets):
+    """
+    Build conservative local seeds around source centroid (for jaw-face partial overlap).
+    """
+    src_pts = np.asarray(source_pcd.points)
+    c = src_pts.mean(axis=0)
+
+    candidates = []
+    I = np.eye(4)
+    candidates.append(I.copy())
+    for ax in angle_deg_list:
+        for ay in angle_deg_list:
+            for az in angle_deg_list:
+                R = _euler_xyz_to_matrix(ax, ay, az)
+                M = np.eye(4)
+                # rotate around centroid: T(c) * R * T(-c)
+                M[:3, :3] = R
+                M[:3, 3] = c - R @ c
+                for dz in z_offsets:
+                    Mz = np.array(M, copy=True)
+                    Mz[2, 3] += dz
+                    candidates.append(Mz)
+    return candidates
+
+
+def rank_init_candidates_fast(source_pcd, target_pcd, init_candidates, voxel_size, top_k=10):
+    """
+    Fast first-pass ranking of init transforms to avoid expensive full ICP on all seeds.
+    """
+    import open3d as o3d
+
+    if not init_candidates:
+        return []
+
+    ranked = []
+    dist = voxel_size * 8.0
+    criteria = o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=40)
+    est = o3d.pipelines.registration.TransformationEstimationPointToPoint(False)
+
+    for idx, M in enumerate(init_candidates):
+        try:
+            r = o3d.pipelines.registration.registration_icp(
+                source_pcd, target_pcd, dist, np.array(M, dtype=float), est, criteria
+            )
+            rmse = float(r.inlier_rmse)
+            fit = float(r.fitness)
+            score = rmse / max(fit, 1e-3)
+            ranked.append((score, idx, np.array(r.transformation)))
+        except Exception:
+            continue
+
+    ranked.sort(key=lambda x: x[0])
+    return ranked[:max(1, top_k)]
+
 @app.route('/api/patient/<patient_id>/register/auto', methods=['POST'])
 def auto_register(patient_id):
     try:
@@ -612,25 +674,19 @@ def auto_register(patient_id):
         if source_is_jaw:
             for r in roi_radii:
                 strategies.append({"name": f"front_roi_{int(r)}", "pre_mode": "front", "roi_radius": r, "use_roi": True, "z_bias": 0.0})
-            for r in [45.0, 55.0, 70.0]:
-                strategies.append({"name": f"center_roi_{int(r)}", "pre_mode": "center", "roi_radius": r, "use_roi": True, "z_bias": 0.0})
-            for r in [55.0, 85.0]:
-                strategies.append({"name": f"none_roi_{int(r)}", "pre_mode": "none", "roi_radius": r, "use_roi": True, "z_bias": 0.0})
+            strategies.append({"name": "center_roi_55", "pre_mode": "center", "roi_radius": 55.0, "use_roi": True, "z_bias": 0.0})
+            strategies.append({"name": "none_roi_55", "pre_mode": "none", "roi_radius": 55.0, "use_roi": True, "z_bias": 0.0})
             for zb in [-10.0, 10.0]:
                 strategies.append({"name": f"front_roi_55_z{int(zb)}", "pre_mode": "front", "roi_radius": 55.0, "use_roi": True, "z_bias": zb})
             strategies.append({"name": "front_full", "pre_mode": "front", "roi_radius": None, "use_roi": False, "z_bias": 0.0})
-            strategies.append({"name": "center_full", "pre_mode": "center", "roi_radius": None, "use_roi": False, "z_bias": 0.0})
         elif target_is_jaw:
             for r in roi_radii:
                 strategies.append({"name": f"front_roi_{int(r)}", "pre_mode": "front", "roi_radius": r, "use_roi": True, "z_bias": 0.0})
-            for r in [45.0, 55.0, 70.0]:
-                strategies.append({"name": f"center_roi_{int(r)}", "pre_mode": "center", "roi_radius": r, "use_roi": True, "z_bias": 0.0})
-            for r in [55.0, 85.0]:
-                strategies.append({"name": f"none_roi_{int(r)}", "pre_mode": "none", "roi_radius": r, "use_roi": True, "z_bias": 0.0})
+            strategies.append({"name": "center_roi_55", "pre_mode": "center", "roi_radius": 55.0, "use_roi": True, "z_bias": 0.0})
+            strategies.append({"name": "none_roi_55", "pre_mode": "none", "roi_radius": 55.0, "use_roi": True, "z_bias": 0.0})
             for zb in [-10.0, 10.0]:
                 strategies.append({"name": f"front_roi_55_z{int(zb)}", "pre_mode": "front", "roi_radius": 55.0, "use_roi": True, "z_bias": zb})
             strategies.append({"name": "front_full", "pre_mode": "front", "roi_radius": None, "use_roi": False, "z_bias": 0.0})
-            strategies.append({"name": "center_full", "pre_mode": "center", "roi_radius": None, "use_roi": False, "z_bias": 0.0})
         else:
             strategies = [
                 {"name": "front_full", "pre_mode": "front", "roi_radius": None, "use_roi": False, "z_bias": 0.0},
@@ -639,6 +695,7 @@ def auto_register(patient_id):
             ]
 
         best_global = None
+        best_valid_global = None
         diagnostics = []
 
         for st in strategies:
@@ -682,12 +739,29 @@ def auto_register(patient_id):
             target_pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 2.0, max_nn=30))
 
             coarse_candidates = build_coarse_init_candidates(source_pcd, target_pcd)
-            init_candidates = [np.array(result_ransac.transformation)] + coarse_candidates
+            local_candidates = build_local_init_candidates_around_centroid(
+                source_pcd,
+                angle_deg_list=[-10.0, 0.0, 10.0],
+                z_offsets=[-5.0, 0.0, 5.0]
+            )
+            init_candidates = [np.array(result_ransac.transformation)] + coarse_candidates + local_candidates
+
+            # Deterministic cap to keep runtime bounded
+            max_init = 96
+            if len(init_candidates) > max_init:
+                idxs = np.linspace(0, len(init_candidates) - 1, num=max_init, dtype=int)
+                init_candidates = [init_candidates[i] for i in idxs]
+
+            # Fast ranking pass, then expensive multiscale only on top seeds
+            ranked = rank_init_candidates_fast(
+                source_pcd, target_pcd, init_candidates, voxel_size, top_k=12
+            )
+            ranked_inits = [M for _, _, M in ranked] if ranked else init_candidates[:12]
 
             best_local_result = None
             best_local_M = None
             best_local_seed = -1
-            for i, init_M in enumerate(init_candidates):
+            for i, init_M in enumerate(ranked_inits):
                 result_i = refine_registration_multiscale(source_pcd, target_pcd, voxel_size, init_M)
                 if (best_local_result is None) or (float(result_i.inlier_rmse) < float(best_local_result.inlier_rmse)):
                     best_local_result = result_i
@@ -698,11 +772,20 @@ def auto_register(patient_id):
             rmse_val = float(best_local_result.inlier_rmse)
             fitness_val = float(best_local_result.fitness)
             quality = evaluate_alignment_quality(source_pcd, target_pcd, best_local_M, voxel_size)
-            # New robust score: prioritize symmetric surface proximity + overlap, then RMSE/Fitness.
+
+            # Center distance penalty: keep transformed jaw near mouth ROI center
+            src_center = np.asarray(source_pcd.points).mean(axis=0)
+            dst_center = np.asarray(target_pcd.points).mean(axis=0)
+            src_center_h = np.array([src_center[0], src_center[1], src_center[2], 1.0], dtype=float)
+            src_center_t = (best_local_M @ src_center_h)[:3]
+            center_dist = float(np.linalg.norm(src_center_t - dst_center))
+
+            # Robust score: heavily penalize tail error and low overlap/local wrong basins.
             score = (
-                (0.50 * quality["median_sym"] + 0.30 * quality["p90_sym"] + 0.20 * rmse_val)
-                / max(quality["overlap"], 1e-3)
+                (0.35 * quality["median_sym"] + 0.45 * quality["p90_sym"] + 0.20 * rmse_val)
+                / (max(quality["overlap"], 1e-3) ** 1.2)
                 / (max(fitness_val, 1e-2) ** 0.25)
+                + 0.08 * center_dist
             )
 
             diag = {
@@ -715,11 +798,21 @@ def auto_register(patient_id):
                 "median_sym": quality["median_sym"],
                 "p90_sym": quality["p90_sym"],
                 "overlap": quality["overlap"],
+                "center_dist": center_dist,
                 "score": float(score),
                 "best_seed_index": int(best_local_seed),
                 "voxel_size": float(voxel_size),
                 "roi_extent": float(roi_extent)
             }
+
+            # Reject degenerate alignments (common when ICP has no real correspondences).
+            is_degenerate = (
+                (fitness_val < 0.02) or
+                (quality["overlap"] < 0.05) or
+                (center_dist > max(roi_extent * 0.8, 60.0)) or
+                ((rmse_val < 1e-6) and (quality["median_sym"] > 3.0))
+            )
+            diag["is_valid"] = not is_degenerate
             diagnostics.append(diag)
 
             if (best_global is None) or (score < best_global["score"]):
@@ -732,27 +825,69 @@ def auto_register(patient_id):
                     "median_sym": quality["median_sym"],
                     "p90_sym": quality["p90_sym"],
                     "overlap": quality["overlap"],
+                    "center_dist": center_dist,
+                    "best_seed_index": int(best_local_seed),
+                    "roi_extent": float(roi_extent)
+                }
+            if (not is_degenerate) and ((best_valid_global is None) or (score < best_valid_global["score"])):
+                best_valid_global = {
+                    "score": float(score),
+                    "rmse": rmse_val,
+                    "fitness": fitness_val,
+                    "M_total": M_total,
+                    "strategy": st["name"],
+                    "median_sym": quality["median_sym"],
+                    "p90_sym": quality["p90_sym"],
+                    "overlap": quality["overlap"],
+                    "center_dist": center_dist,
                     "best_seed_index": int(best_local_seed),
                     "roi_extent": float(roi_extent)
                 }
 
-        M_total = best_global["M_total"]
-        rmse_val = best_global["rmse"]
-        fitness_val = best_global["fitness"]
-        rmse_gate = max(best_global["roi_extent"] * 0.015, 1.2)
+        # Prefer valid alignment. If none valid, fallback to center prealign (conservative).
+        if best_valid_global is not None:
+            chosen = best_valid_global
+            selection_mode = "valid_best"
+        elif best_global is not None:
+            # conservative fallback transform (front prealign) instead of trusting degenerate ICP
+            M_fallback = np.eye(4)
+            M_fallback[:3, 3] = t_pre
+            chosen = {
+                "score": float("inf"),
+                "rmse": float(best_global["rmse"]),
+                "fitness": float(best_global["fitness"]),
+                "M_total": M_fallback,
+                "strategy": "fallback_prealign_front",
+                "median_sym": float(best_global["median_sym"]),
+                "p90_sym": float(best_global["p90_sym"]),
+                "overlap": float(best_global["overlap"]),
+                "center_dist": float(best_global["center_dist"]),
+                "best_seed_index": -1,
+                "roi_extent": float(best_global["roi_extent"])
+            }
+            selection_mode = "fallback_prealign"
+        else:
+            raise RuntimeError("Auto registration: no candidate produced")
+
+        M_total = chosen["M_total"]
+        rmse_val = chosen["rmse"]
+        fitness_val = chosen["fitness"]
+        rmse_gate = max(chosen["roi_extent"] * 0.015, 1.2)
         fitness_gate = 0.20
         quality_passed = (
             (rmse_val <= rmse_gate) and
             (fitness_val >= fitness_gate) and
-            (best_global["overlap"] >= 0.15)
+            (chosen["overlap"] >= 0.30) and
+            (chosen["center_dist"] <= 40.0)
         )
         low_confidence = not quality_passed
 
         print(
-            f"Auto best strategy={best_global['strategy']}, seed={best_global['best_seed_index']}, "
+            f"Auto best strategy={chosen['strategy']}, seed={chosen['best_seed_index']}, mode={selection_mode}, "
             f"rmse={rmse_val:.4f}, fitness={fitness_val:.4f}, "
-            f"median={best_global['median_sym']:.4f}, p90={best_global['p90_sym']:.4f}, "
-            f"overlap={best_global['overlap']:.4f}, low_confidence={low_confidence}"
+            f"median={chosen['median_sym']:.4f}, p90={chosen['p90_sym']:.4f}, "
+            f"overlap={chosen['overlap']:.4f}, center_dist={chosen['center_dist']:.4f}, "
+            f"low_confidence={low_confidence}"
         )
 
         return jsonify({
@@ -764,11 +899,13 @@ def auto_register(patient_id):
             "quality_gate": {
                 "rmse_max": float(rmse_gate),
                 "fitness_min": float(fitness_gate),
-                "overlap_min": 0.15,
+                "overlap_min": 0.30,
+                "center_dist_max": 40.0,
                 "passed": bool(quality_passed)
             },
-            "best_strategy": best_global["strategy"],
-            "best_seed_index": int(best_global["best_seed_index"]),
+            "best_strategy": chosen["strategy"],
+            "best_seed_index": int(chosen["best_seed_index"]),
+            "selection_mode": selection_mode,
             "attempt_count": len(strategies),
             "attempt_diagnostics": sorted(diagnostics, key=lambda d: d["score"])[:12],
             "model_centers": {
