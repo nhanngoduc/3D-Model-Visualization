@@ -372,11 +372,19 @@ class IndependentModelViewer {
         const size = new THREE.Vector3();
         box.getSize(size);
 
+        // Store the original center BEFORE translating geometry
+        this.modelCenter = center.clone();
+
         this.mesh.geometry.translate(-center.x, -center.y, -center.z);
 
         const maxDim = Math.max(size.x, size.y, size.z);
         const scale = 3 / maxDim;
         this.mesh.scale.setScalar(scale);
+
+        // Store the scale factor
+        this.modelScale = scale;
+
+        console.log(`[${this.label}] Model center: (${center.x.toFixed(2)}, ${center.y.toFixed(2)}, ${center.z.toFixed(2)}), scale: ${scale.toFixed(6)}`);
 
         this.mesh.geometry.computeBoundingBox();
     }
@@ -473,15 +481,15 @@ class IndependentModelViewer {
         // Add numeric label as a separate sprite if provided
         if (label) {
             const sprite = this.createTextSprite(label);
-                if (sprite) {
-                    // We'll keep label sprites in the scene (not as children) and update their world
-                    // position every frame so they remain readable and visible.
-                    sprite.userData.baseSpriteScale = new THREE.Vector3(0.35, 0.18, 1.0);
-                    sprite.userData.pixelSize = sprite.userData.pixelSize || 18;
-                    // store association for updates
-                    this._labelSprites.push({ marker: marker, sprite: sprite, offsetLocalY: radius * 0.9 });
-                    this.scene.add(sprite);
-                }
+            if (sprite) {
+                // We'll keep label sprites in the scene (not as children) and update their world
+                // position every frame so they remain readable and visible.
+                sprite.userData.baseSpriteScale = new THREE.Vector3(0.35, 0.18, 1.0);
+                sprite.userData.pixelSize = sprite.userData.pixelSize || 18;
+                // store association for updates
+                this._labelSprites.push({ marker: marker, sprite: sprite, offsetLocalY: radius * 0.9 });
+                this.scene.add(sprite);
+            }
         }
 
         this.markers.push(marker);
@@ -685,12 +693,12 @@ class IndependentModelViewer {
 
             if (marker.children && marker.children.length > 0) {
                 for (const child of marker.children) {
-                        if (child.isSprite) {
-                            // If this child is a label sprite, keep it at a readable on-screen pixel size
-                            const labelPixelSize = child.userData.pixelSize || marker.userData.labelPixelSize || 18;
-                            const desiredWorldLabel = labelPixelSize * worldPerPixel;
-                            child.scale.set(desiredWorldLabel, desiredWorldLabel, 1.0);
-                        }
+                    if (child.isSprite) {
+                        // If this child is a label sprite, keep it at a readable on-screen pixel size
+                        const labelPixelSize = child.userData.pixelSize || marker.userData.labelPixelSize || 18;
+                        const desiredWorldLabel = labelPixelSize * worldPerPixel;
+                        child.scale.set(desiredWorldLabel, desiredWorldLabel, 1.0);
+                    }
                 }
             }
 

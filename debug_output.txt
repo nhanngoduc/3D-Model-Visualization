@@ -1,0 +1,93 @@
+﻿============================================================
+MESH ANALYSIS
+============================================================
+
+Source: IOS trios UpperJawScan.ply
+  Vertices: 162300
+  Faces: 321952
+  Bounds min: [-29.56400108 -22.51512718 -36.7845459 ]
+  Bounds max: [34.64171982 16.16740417 21.20883942]
+  Extent: [64.2057209  38.68253136 57.99338531]
+  Max extent: 64.21
+  Centroid: [ 1.91798013 -3.64032656 -6.46513784]
+
+Target: FaceWithRetractors_refine.ply
+  Vertices: 1898327
+  Faces: 3743382
+  Bounds min: [-128.44625854 -112.98000336 -725.00024414]
+  Bounds max: [ 131.87168884  120.66769409 -521.18353271]
+  Extent: [260.31794739 233.64769745 203.81671143]
+  Max extent: 260.32
+  Centroid: [   2.71779838   16.30499953 -596.79043369]
+
+Bounding Box Overlap: False
+
+============================================================
+TESTING DIFFERENT VOXEL SIZES
+============================================================
+
+Voxel size: 0.81 (0.5% of extent)
+  Source downsampled: 9960 points
+  Target downsampled: 27334 points
+[Open3D WARNING] Too few correspondences (899) after mutual filter, fall back to original correspondences.
+  RANSAC: fitness=0.0000, rmse=0.0000, time=14.7s
+  ICP (thresh=0.32): fitness=0.0000, rmse=0.0000
+  ICP (thresh=0.81): fitness=0.0000, rmse=0.0000
+  ICP (thresh=1.62): fitness=0.0000, rmse=0.0000
+  ICP (thresh=4.06): fitness=0.0000, rmse=0.0000
+
+Voxel size: 1.62 (1.0% of extent)
+  Source downsampled: 3035 points
+  Target downsampled: 21156 points
+  RANSAC: fitness=0.2484, rmse=1.6422, time=7.1s
+  ICP (thresh=0.65): fitness=0.0210, rmse=0.4959
+  ICP (thresh=1.62): fitness=0.1828, rmse=1.0939
+  ICP (thresh=3.25): fitness=0.5120, rmse=1.9704
+  ICP (thresh=8.11): fitness=0.9563, rmse=3.5082
+
+Voxel size: 3.25 (2.0% of extent)
+  Source downsampled: 813 points
+  Target downsampled: 10216 points
+  RANSAC: fitness=0.6728, rmse=2.8638, time=6.6s
+  ICP (thresh=1.30): fitness=0.1694, rmse=0.9184
+  ICP (thresh=3.25): fitness=0.6140, rmse=1.8923
+  ICP (thresh=6.49): fitness=0.8607, rmse=3.1245
+  ICP (thresh=16.23): fitness=1.0000, rmse=4.2161
+
+Voxel size: 4.87 (3.0% of extent)
+  Source downsampled: 379 points
+  Target downsampled: 5262 points
+  RANSAC: fitness=0.6675, rmse=3.9558, time=6.5s
+  ICP (thresh=1.95): fitness=0.2672, rmse=1.2819
+  ICP (thresh=4.87): fitness=0.7878, rmse=2.5773
+  ICP (thresh=9.74): fitness=0.9959, rmse=3.9036
+  ICP (thresh=24.34): fitness=1.0000, rmse=4.3898
+
+Voxel size: 8.11 (5.0% of extent)
+  Source downsampled: 141 points
+  Target downsampled: 2158 points
+  RANSAC: fitness=0.9220, rmse=6.3066, time=6.4s
+  ICP (thresh=3.25): fitness=0.4096, rmse=1.9701
+  ICP (thresh=8.11): fitness=0.8411, rmse=4.0939
+  ICP (thresh=16.23): fitness=1.0000, rmse=5.0347
+  ICP (thresh=40.57): fitness=1.0000, rmse=5.0347
+
+============================================================
+TESTING FAST GLOBAL REGISTRATION (FGR)
+============================================================
+FGR: fitness=0.0000, rmse=0.0000, time=0.1s
+  ICP after FGR (thresh=3.25): fitness=0.0000, rmse=0.0000
+  ICP after FGR (thresh=6.49): fitness=0.0000, rmse=0.0000
+  ICP after FGR (thresh=16.23): fitness=0.0000, rmse=0.0000
+  ICP after FGR (thresh=32.45): fitness=0.0000, rmse=0.0000
+
+============================================================
+BEST TRANSFORM from FGR + ICP (thresh=5.0*voxel)
+============================================================
+Final fitness: 0.0000
+Final RMSE: 0.0000
+Transform:
+[[   1.            0.            0.            0.74846794]
+ [   0.            1.            0.           19.71430213]
+ [   0.            0.            1.         -588.20323847]
+ [   0.            0.            0.            1.        ]]

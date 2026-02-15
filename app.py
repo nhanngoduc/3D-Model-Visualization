@@ -298,6 +298,547 @@ def register_icp(patient_id):
         print(f"ICP Error: {e}")
         return jsonify({"error": str(e)}), 500
 
+def extract_mouth_roi(face_mesh, jaw_mesh, distance_threshold=60.0):
+    """
+    Robust ROI extraction: Find all face points within X mm of the pre-aligned mouth scan.
+    This works even if models are rotated or have large scales.
+    """
+    import open3d as o3d
+    
+    # 1. Convert to Open3D for fast neighborhood search
+    face_pcd = o3d.geometry.PointCloud()
+    face_pcd.points = o3d.utility.Vector3dVector(np.array(face_mesh.vertices))
+    
+    jaw_pcd = o3d.geometry.PointCloud()
+    jaw_pcd.points = o3d.utility.Vector3dVector(np.array(jaw_mesh.vertices))
+    
+    # 2. Build KDTree for Face Scan
+    kdtree = o3d.geometry.KDTreeFlann(face_pcd)
+    
+    # 3. Find face points near any jaw point
+    roi_indices = set()
+    
+    # Strategy: Sample jaw points to speed up search
+    sample_size = min(len(jaw_pcd.points), 1000)
+    rng = np.random.default_rng(42)
+    jaw_indices = rng.choice(len(jaw_pcd.points), sample_size, replace=False)
+    
+    for idx in jaw_indices:
+        query_point = jaw_pcd.points[idx]
+        [_, idx_found, _] = kdtree.search_radius_vector_3d(query_point, distance_threshold)
+        roi_indices.update(idx_found)
+    
+    if len(roi_indices) < 200:
+        print(f"WARNING: Neighborhood ROI too small ({len(roi_indices)} pts), using full face")
+        return face_mesh
+        
+    print(f"Neighborhood ROI: {len(roi_indices)} points within {distance_threshold}mm of jaw")
+    
+    # 4. Extract points and create ROI mesh
+    roi_vertices = np.asarray(face_pcd.points)[list(roi_indices)]
+    roi_mesh = trimesh.points.PointCloud(roi_vertices)
+    
+    return roi_mesh
+
+def get_aabb_center(mesh):
+    """Get the center of the Axis-Aligned Bounding Box (AABB) to match Three.js logic."""
+    bounds = mesh.bounds
+    return (bounds[0] + bounds[1]) / 2.0
+
+
+def _transform_from_rt(R, t):
+    M = np.eye(4)
+    M[:3, :3] = R
+    M[:3, 3] = t
+    return M
+
+
+def _euler_xyz_to_matrix(ax_deg, ay_deg, az_deg):
+    ax = np.deg2rad(ax_deg)
+    ay = np.deg2rad(ay_deg)
+    az = np.deg2rad(az_deg)
+    cx, sx = np.cos(ax), np.sin(ax)
+    cy, sy = np.cos(ay), np.sin(ay)
+    cz, sz = np.cos(az), np.sin(az)
+
+    Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
+    Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+    Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
+    return Rz @ Ry @ Rx
+
+
+def _pca_frame(points):
+    c = points.mean(axis=0)
+    X = points - c
+    cov = (X.T @ X) / max(1, len(points))
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    order = np.argsort(eigvals)[::-1]
+    V = eigvecs[:, order]
+    if np.linalg.det(V) < 0:
+        V[:, -1] *= -1
+    return c, V
+
+
+def build_coarse_init_candidates(source_pcd, target_pcd):
+    src_pts = np.asarray(source_pcd.points)
+    dst_pts = np.asarray(target_pcd.points)
+
+    c_src, V_src = _pca_frame(src_pts)
+    c_dst, V_dst = _pca_frame(dst_pts)
+
+    # PCA sign ambiguity handling (4 right-handed variants)
+    flip_variants = [
+        np.diag([1, 1, 1]),
+        np.diag([1, -1, -1]),
+        np.diag([-1, 1, -1]),
+        np.diag([-1, -1, 1]),
+    ]
+
+    # Multi-start small set of seed rotations
+    seed_eulers = [
+        (0, 0, 0),
+        (0, 0, 90),
+        (0, 0, 180),
+        (0, 0, 270),
+        (0, 180, 0),
+        (180, 0, 0),
+    ]
+
+    candidates = []
+    for F in flip_variants:
+        R_pca = V_dst @ F @ V_src.T
+        for ax, ay, az in seed_eulers:
+            R_seed = _euler_xyz_to_matrix(ax, ay, az)
+            R = R_seed @ R_pca
+            t = c_dst - R @ c_src
+            candidates.append(_transform_from_rt(R, t))
+
+    return candidates
+
+def trimesh_to_open3d(mesh):
+    """Convert a trimesh mesh to an Open3D TriangleMesh, then to PointCloud."""
+    import open3d as o3d
+    
+    o3d_mesh = o3d.geometry.TriangleMesh()
+    o3d_mesh.vertices = o3d.utility.Vector3dVector(np.array(mesh.vertices))
+    
+    # Check if mesh has faces (TriangleMesh) or is a PointCloud
+    if hasattr(mesh, 'faces') and len(mesh.faces) > 0:
+        o3d_mesh.triangles = o3d.utility.Vector3iVector(np.array(mesh.faces))
+        o3d_mesh.compute_vertex_normals()
+        # Sample points from the mesh for registration
+        pcd = o3d_mesh.sample_points_uniformly(number_of_points=30000)
+    else:
+        # Already a point cloud, just convert
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(np.array(mesh.vertices))
+    
+    return pcd, o3d_mesh
+
+
+def preprocess_point_cloud(pcd, voxel_size):
+    """Downsample point cloud, estimate normals, compute FPFH features."""
+    import open3d as o3d
+    
+    # Downsample
+    pcd_down = pcd.voxel_down_sample(voxel_size)
+    
+    # Estimate normals
+    radius_normal = voxel_size * 2.0
+    pcd_down.estimate_normals(
+        o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30)
+    )
+    
+    # Compute FPFH features
+    radius_feature = voxel_size * 5.0
+    fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+        pcd_down,
+        o3d.geometry.KDTreeSearchParamHybrid(radius=radius_feature, max_nn=100)
+    )
+    
+    return pcd_down, fpfh
+
+def execute_global_registration(source_down, target_down, source_fpfh, target_fpfh, voxel_size):
+    """Run RANSAC-based global registration using FPFH features."""
+    import open3d as o3d
+    
+    distance_threshold = voxel_size * 1.5
+    
+    result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+        source_down, target_down, source_fpfh, target_fpfh,
+        mutual_filter=True,
+        max_correspondence_distance=distance_threshold,
+        estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
+        ransac_n=4,
+        checkers=[
+            o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
+            o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold)
+        ],
+        criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(4000000, 500)
+    )
+    
+    return result
+
+def refine_registration(source, target, voxel_size, init_transform):
+    """Refine alignment using Point-to-Plane ICP."""
+    import open3d as o3d
+    
+    # Use 1x voxel_size for partial overlap (0.4x is too tight)
+    distance_threshold = voxel_size * 1.0
+    
+    # Estimate normals for Point-to-Plane
+    source.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 2.0, max_nn=30))
+    target.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 2.0, max_nn=30))
+    
+    result = o3d.pipelines.registration.registration_icp(
+        source, target,
+        distance_threshold,
+        init_transform,
+        o3d.pipelines.registration.TransformationEstimationPointToPlane(),
+        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=200)
+    )
+    
+    return result
+
+
+def refine_registration_multiscale(source, target, voxel_size, init_transform):
+    import open3d as o3d
+
+    thresholds = [voxel_size * 2.0, voxel_size * 1.0, voxel_size * 0.5]
+    iterations = [100, 140, 200]
+
+    M = np.array(init_transform, dtype=float)
+    final_result = None
+    for dist_th, max_iter in zip(thresholds, iterations):
+        final_result = o3d.pipelines.registration.registration_icp(
+            source, target,
+            dist_th,
+            M,
+            o3d.pipelines.registration.TransformationEstimationPointToPlane(),
+            o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
+        )
+        M = np.array(final_result.transformation)
+
+    return final_result
+
+
+def evaluate_alignment_quality(source_pcd, target_pcd, transform, voxel_size):
+    """
+    Symmetric quality metrics for partial-overlap registration.
+    Lower score is better.
+    """
+    import open3d as o3d
+
+    src_t = o3d.geometry.PointCloud(source_pcd)
+    src_t.transform(np.array(transform))
+
+    d_st = np.asarray(src_t.compute_point_cloud_distance(target_pcd))
+    d_ts = np.asarray(target_pcd.compute_point_cloud_distance(src_t))
+
+    if len(d_st) == 0 or len(d_ts) == 0:
+        return {
+            "score": float("inf"),
+            "median_sym": float("inf"),
+            "p90_sym": float("inf"),
+            "overlap": 0.0
+        }
+
+    median_sym = 0.5 * (float(np.median(d_st)) + float(np.median(d_ts)))
+    p90_sym = 0.5 * (float(np.percentile(d_st, 90)) + float(np.percentile(d_ts, 90)))
+    mean_sym = 0.5 * (float(np.mean(d_st)) + float(np.mean(d_ts)))
+
+    inlier_th = max(voxel_size * 1.5, 1.0)
+    overlap = 0.5 * (
+        float(np.mean(d_st < inlier_th)) +
+        float(np.mean(d_ts < inlier_th))
+    )
+
+    # Penalize low-overlap local minima.
+    score = (0.45 * median_sym + 0.35 * p90_sym + 0.20 * mean_sym) / max(overlap, 1e-3)
+
+    return {
+        "score": float(score),
+        "median_sym": float(median_sym),
+        "p90_sym": float(p90_sym),
+        "mean_sym": float(mean_sym),
+        "overlap": float(overlap)
+    }
+
+@app.route('/api/patient/<patient_id>/register/auto', methods=['POST'])
+def auto_register(patient_id):
+    try:
+        import open3d as o3d
+        
+        data = request.json
+        source_path = data.get('source_path')
+        target_path = data.get('target_path')
+
+        if not source_path or not target_path:
+            return jsonify({"error": "Missing source or target path"}), 400
+        
+        full_source = os.path.join(ROOT_FOLDER, source_path)
+        full_target = os.path.join(ROOT_FOLDER, target_path)
+
+        if not os.path.exists(full_source) or not os.path.exists(full_target):
+            return jsonify({"error": "Source or target file not found"}), 404
+        
+        print(f"\n=== ROBUST Auto Registration Pipeline ===")
+        
+        # 1. Load meshes
+        src_mesh = trimesh.load(full_source, process=False)
+        dst_mesh = trimesh.load(full_target, process=False)
+        
+        # 2. SYNCED PRE-ALIGNMENT (AABB logic matching Three.js)
+        c_src = get_aabb_center(src_mesh)
+        c_dst = get_aabb_center(dst_mesh)
+        
+        # Initial guess: Align XY centers, and align Z-fronts
+        t_xy = c_dst[:2] - c_src[:2]
+        t_z = dst_mesh.bounds[0][2] - src_mesh.bounds[0][2]
+        
+        t_pre = np.array([t_xy[0], t_xy[1], t_z])
+        print(f"Sync Pre-alignment (AABB Front): {t_pre}")
+        
+        # 3. Build auto strategies (ROI + prealign variants)
+        src_extent = np.max(src_mesh.extents)
+        dst_extent = np.max(dst_mesh.extents)
+        source_is_jaw = dst_extent > src_extent * 1.5
+        target_is_jaw = src_extent > dst_extent * 1.5
+
+        # Always run multiple auto attempts and choose best (no manual fallback gate here).
+        strategies = []
+        roi_radii = [35.0, 45.0, 55.0, 70.0, 85.0]
+        t_center = c_dst - c_src
+        if source_is_jaw:
+            for r in roi_radii:
+                strategies.append({"name": f"front_roi_{int(r)}", "pre_mode": "front", "roi_radius": r, "use_roi": True, "z_bias": 0.0})
+            for r in [45.0, 55.0, 70.0]:
+                strategies.append({"name": f"center_roi_{int(r)}", "pre_mode": "center", "roi_radius": r, "use_roi": True, "z_bias": 0.0})
+            for r in [55.0, 85.0]:
+                strategies.append({"name": f"none_roi_{int(r)}", "pre_mode": "none", "roi_radius": r, "use_roi": True, "z_bias": 0.0})
+            for zb in [-10.0, 10.0]:
+                strategies.append({"name": f"front_roi_55_z{int(zb)}", "pre_mode": "front", "roi_radius": 55.0, "use_roi": True, "z_bias": zb})
+            strategies.append({"name": "front_full", "pre_mode": "front", "roi_radius": None, "use_roi": False, "z_bias": 0.0})
+            strategies.append({"name": "center_full", "pre_mode": "center", "roi_radius": None, "use_roi": False, "z_bias": 0.0})
+        elif target_is_jaw:
+            for r in roi_radii:
+                strategies.append({"name": f"front_roi_{int(r)}", "pre_mode": "front", "roi_radius": r, "use_roi": True, "z_bias": 0.0})
+            for r in [45.0, 55.0, 70.0]:
+                strategies.append({"name": f"center_roi_{int(r)}", "pre_mode": "center", "roi_radius": r, "use_roi": True, "z_bias": 0.0})
+            for r in [55.0, 85.0]:
+                strategies.append({"name": f"none_roi_{int(r)}", "pre_mode": "none", "roi_radius": r, "use_roi": True, "z_bias": 0.0})
+            for zb in [-10.0, 10.0]:
+                strategies.append({"name": f"front_roi_55_z{int(zb)}", "pre_mode": "front", "roi_radius": 55.0, "use_roi": True, "z_bias": zb})
+            strategies.append({"name": "front_full", "pre_mode": "front", "roi_radius": None, "use_roi": False, "z_bias": 0.0})
+            strategies.append({"name": "center_full", "pre_mode": "center", "roi_radius": None, "use_roi": False, "z_bias": 0.0})
+        else:
+            strategies = [
+                {"name": "front_full", "pre_mode": "front", "roi_radius": None, "use_roi": False, "z_bias": 0.0},
+                {"name": "center_full", "pre_mode": "center", "roi_radius": None, "use_roi": False, "z_bias": 0.0},
+                {"name": "none_full", "pre_mode": "none", "roi_radius": None, "use_roi": False, "z_bias": 0.0},
+            ]
+
+        best_global = None
+        diagnostics = []
+
+        for st in strategies:
+            src_work = src_mesh.copy()
+            M_pre = np.eye(4)
+            t_curr = np.array([0.0, 0.0, 0.0], dtype=float)
+            if st["pre_mode"] == "front":
+                t_curr = np.array(t_pre, dtype=float)
+            elif st["pre_mode"] == "center":
+                t_curr = np.array(t_center, dtype=float)
+            t_curr[2] += float(st.get("z_bias", 0.0))
+            if st["pre_mode"] != "none":
+                src_work.apply_translation(t_curr)
+                M_pre[:3, 3] = t_curr
+
+            # ROI selection for jaw-face alignment
+            if st["use_roi"] and source_is_jaw:
+                dst_roi = extract_mouth_roi(dst_mesh, src_work, distance_threshold=st["roi_radius"])
+                src_roi = src_work
+            elif st["use_roi"] and target_is_jaw:
+                src_roi = extract_mouth_roi(src_work, dst_mesh, distance_threshold=st["roi_radius"])
+                dst_roi = dst_mesh
+            else:
+                src_roi = src_work
+                dst_roi = dst_mesh
+
+            source_pcd, _ = trimesh_to_open3d(src_roi)
+            target_pcd, _ = trimesh_to_open3d(dst_roi)
+
+            roi_extent = max(np.max(src_roi.extents), np.max(dst_roi.extents))
+            voxel_size = max(roi_extent * 0.012, 0.6)
+
+            source_down, source_fpfh = preprocess_point_cloud(source_pcd, voxel_size)
+            target_down, target_fpfh = preprocess_point_cloud(target_pcd, voxel_size)
+
+            result_ransac = execute_global_registration(
+                source_down, target_down, source_fpfh, target_fpfh, voxel_size
+            )
+
+            source_pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 2.0, max_nn=30))
+            target_pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 2.0, max_nn=30))
+
+            coarse_candidates = build_coarse_init_candidates(source_pcd, target_pcd)
+            init_candidates = [np.array(result_ransac.transformation)] + coarse_candidates
+
+            best_local_result = None
+            best_local_M = None
+            best_local_seed = -1
+            for i, init_M in enumerate(init_candidates):
+                result_i = refine_registration_multiscale(source_pcd, target_pcd, voxel_size, init_M)
+                if (best_local_result is None) or (float(result_i.inlier_rmse) < float(best_local_result.inlier_rmse)):
+                    best_local_result = result_i
+                    best_local_M = np.array(result_i.transformation)
+                    best_local_seed = i
+
+            M_total = best_local_M @ M_pre
+            rmse_val = float(best_local_result.inlier_rmse)
+            fitness_val = float(best_local_result.fitness)
+            quality = evaluate_alignment_quality(source_pcd, target_pcd, best_local_M, voxel_size)
+            # New robust score: prioritize symmetric surface proximity + overlap, then RMSE/Fitness.
+            score = (
+                (0.50 * quality["median_sym"] + 0.30 * quality["p90_sym"] + 0.20 * rmse_val)
+                / max(quality["overlap"], 1e-3)
+                / (max(fitness_val, 1e-2) ** 0.25)
+            )
+
+            diag = {
+                "strategy": st["name"],
+                "pre_mode": st["pre_mode"],
+                "roi_radius": st["roi_radius"],
+                "z_bias": float(st.get("z_bias", 0.0)),
+                "rmse": rmse_val,
+                "fitness": fitness_val,
+                "median_sym": quality["median_sym"],
+                "p90_sym": quality["p90_sym"],
+                "overlap": quality["overlap"],
+                "score": float(score),
+                "best_seed_index": int(best_local_seed),
+                "voxel_size": float(voxel_size),
+                "roi_extent": float(roi_extent)
+            }
+            diagnostics.append(diag)
+
+            if (best_global is None) or (score < best_global["score"]):
+                best_global = {
+                    "score": float(score),
+                    "rmse": rmse_val,
+                    "fitness": fitness_val,
+                    "M_total": M_total,
+                    "strategy": st["name"],
+                    "median_sym": quality["median_sym"],
+                    "p90_sym": quality["p90_sym"],
+                    "overlap": quality["overlap"],
+                    "best_seed_index": int(best_local_seed),
+                    "roi_extent": float(roi_extent)
+                }
+
+        M_total = best_global["M_total"]
+        rmse_val = best_global["rmse"]
+        fitness_val = best_global["fitness"]
+        rmse_gate = max(best_global["roi_extent"] * 0.015, 1.2)
+        fitness_gate = 0.20
+        quality_passed = (
+            (rmse_val <= rmse_gate) and
+            (fitness_val >= fitness_gate) and
+            (best_global["overlap"] >= 0.15)
+        )
+        low_confidence = not quality_passed
+
+        print(
+            f"Auto best strategy={best_global['strategy']}, seed={best_global['best_seed_index']}, "
+            f"rmse={rmse_val:.4f}, fitness={fitness_val:.4f}, "
+            f"median={best_global['median_sym']:.4f}, p90={best_global['p90_sym']:.4f}, "
+            f"overlap={best_global['overlap']:.4f}, low_confidence={low_confidence}"
+        )
+
+        return jsonify({
+            "rotation": M_total[:3, :3].tolist(),
+            "translation": M_total[:3, 3].tolist(),
+            "rmse": rmse_val,
+            "fitness": fitness_val,
+            "low_confidence": bool(low_confidence),
+            "quality_gate": {
+                "rmse_max": float(rmse_gate),
+                "fitness_min": float(fitness_gate),
+                "overlap_min": 0.15,
+                "passed": bool(quality_passed)
+            },
+            "best_strategy": best_global["strategy"],
+            "best_seed_index": int(best_global["best_seed_index"]),
+            "attempt_count": len(strategies),
+            "attempt_diagnostics": sorted(diagnostics, key=lambda d: d["score"])[:12],
+            "model_centers": {
+                "source": c_src.tolist(),
+                "target": c_dst.tolist()
+            }
+        })
+
+    except Exception as e:
+        print(f"Auto Registration Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/patient/<patient_id>/register/icp', methods=['POST'])
+def refine_icp(patient_id):
+    """Refine current alignment using Open3D Point-to-Plane ICP."""
+    try:
+        import open3d as o3d
+        
+        data = request.json
+        source_path = data.get('source_path')
+        target_path = data.get('target_path')
+        curr_rot = data.get('rotation') 
+        curr_trans = data.get('translation')
+
+        if not source_path or not target_path or curr_rot is None:
+            return jsonify({"error": "Missing required data"}), 400
+
+        src_mesh = trimesh.load(os.path.join(ROOT_FOLDER, source_path), process=False)
+        dst_mesh = trimesh.load(os.path.join(ROOT_FOLDER, target_path), process=False)
+
+        # Convert to Open3D
+        source_pcd, _ = trimesh_to_open3d(src_mesh)
+        target_pcd, _ = trimesh_to_open3d(dst_mesh)
+        
+        # Reconstruct current transform
+        M_curr = np.eye(4)
+        R_arr = np.array(curr_rot)
+        if R_arr.shape == (3, 3):
+            M_curr[:3, :3] = R_arr
+            M_curr[:3, 3] = np.array(curr_trans)
+        elif R_arr.shape == (4, 4):
+            M_curr = R_arr
+            
+        # Adaptive voxel size
+        src_extent = np.max(source_pcd.get_max_bound() - source_pcd.get_min_bound())
+        voxel_size = max(src_extent * 0.005, 0.3)  # Finer for refinement
+        
+        # Point-to-Plane ICP refinement
+        result = refine_registration(source_pcd, target_pcd, voxel_size, M_curr)
+        
+        M_final = np.array(result.transformation)
+        
+        return jsonify({
+            "rotation": M_final[:3, :3].tolist(),
+            "translation": M_final[:3, 3].tolist(),
+            "rmse": float(result.inlier_rmse),
+            "fitness": float(result.fitness)
+        })
+
+    except Exception as e:
+        print(f"Refinement Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+
+
 if __name__ == '__main__':
     print(f"Starting Flask server...")
     print(f"Root folder: {ROOT_FOLDER}")

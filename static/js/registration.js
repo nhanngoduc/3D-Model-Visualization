@@ -12,6 +12,56 @@ let currentPatientData = {};
 let selectedSource = null;
 let selectedTarget = null;
 
+function buildRotationMatrix4(rotation3x3) {
+    const R = rotation3x3;
+    const m = new THREE.Matrix4();
+    m.set(
+        R[0][0], R[0][1], R[0][2], 0,
+        R[1][0], R[1][1], R[1][2], 0,
+        R[2][0], R[2][1], R[2][2], 0,
+        0, 0, 0, 1
+    );
+    return m;
+}
+
+function computeVisualPoseFromTransform(transform) {
+    if (!splitViewViewer || !splitViewViewer.sourceViewer || !splitViewViewer.targetViewer) return null;
+    if (!transform || !transform.rotation || !transform.translation) return null;
+
+    const sourceViewer = splitViewViewer.sourceViewer;
+    const targetViewer = splitViewViewer.targetViewer;
+
+    // IMPORTANT: Use viewer centers (the exact centers used when geometry was translated in Three.js).
+    // Using backend AABB centers here can shift the overlay because the displayed geometry is centered
+    // using sourceViewer/targetViewer.modelCenter, not backend mesh centers.
+    const centerSrc = sourceViewer.modelCenter || new THREE.Vector3(0, 0, 0);
+    const centerDst = targetViewer.modelCenter || new THREE.Vector3(0, 0, 0);
+    const targetScale = targetViewer.modelScale || 1.0;
+
+    const rotMat = buildRotationMatrix4(transform.rotation);
+    const tGlobal = new THREE.Vector3(
+        transform.translation[0],
+        transform.translation[1],
+        transform.translation[2]
+    );
+    const rotatedCenterSrc = centerSrc.clone().applyMatrix4(rotMat);
+    const tVisual = rotatedCenterSrc.add(tGlobal).sub(centerDst).multiplyScalar(targetScale);
+
+    return {
+        rotation: transform.rotation,
+        position: [tVisual.x, tVisual.y, tVisual.z],
+        scale: targetScale
+    };
+}
+
+function ensureTransformVisualPose(stateTransform) {
+    if (!stateTransform) return null;
+    if (stateTransform.visual_pose) return stateTransform.visual_pose;
+    const visual = computeVisualPoseFromTransform(stateTransform);
+    if (visual) stateTransform.visual_pose = visual;
+    return visual;
+}
+
 // Initialize
 async function initRegistration() {
     console.log('Initializing Registration module...');
@@ -227,6 +277,12 @@ function setupEventListeners() {
             document.getElementById('directionIndicator').style.display = 'flex';
         }
     });
+
+    // Auto Registration
+    const autoRegBtn = document.getElementById('autoRegBtn');
+    if (autoRegBtn) {
+        autoRegBtn.addEventListener('click', performAutoRegistration);
+    }
 
     // REG-01.3: Swap source and target
     swapBtn.addEventListener('click', swapModels);
@@ -481,65 +537,53 @@ async function switchToRegistrationOverlayView() {
                 // So displayed P = (P_orig - C) * S.
                 // To restore P_orig: P_orig = (P/S) + C.
 
-                // TARGET MESH (Reference)
-                // Clone the mesh (shares geometry)
+                // TARGET MESH (Reference) — use target's own scale
                 const targetClone = targetMesh.clone();
-                // Reset Rotation (crucial, as user might have rotated it)
                 targetClone.rotation.set(0, 0, 0);
-                // Reset Scale (it was scaled by S)
-                targetClone.scale.setScalar(1);
-                // Move Position to C (effectively undoing the geometry translation -C)
-                if (targetViewer.modelCenter) {
-                    targetClone.position.copy(targetViewer.modelCenter);
-                }
+                targetClone.position.set(0, 0, 0);
+                // Keep target at its own scale (geometry is centered, scale from splitView)
+                const S_dst = targetViewer.modelScale || 1.0;
+                targetClone.scale.setScalar(S_dst);
 
                 // SOURCE MESH (Transformed)
                 const sourceClone = sourceMesh.clone();
                 sourceClone.rotation.set(0, 0, 0);
-                sourceClone.scale.setScalar(1);
-                if (sourceViewer.modelCenter) {
-                    sourceClone.position.copy(sourceViewer.modelCenter);
-                }
+                sourceClone.position.set(0, 0, 0);
 
-                // Apply Registration Transform to Source
+                // Apply Registration Transform if exists
                 if (manualState.transform) {
-                    const R = manualState.transform.rotation;
-                    const t = manualState.transform.translation;
-
-                    const m = new THREE.Matrix4();
-                    m.set(
-                        R[0][0], R[0][1], R[0][2], t[0],
-                        R[1][0], R[1][1], R[1][2], t[1],
-                        R[2][0], R[2][1], R[2][2], t[2],
-                        0, 0, 0, 1
-                    );
-
-                    // Apply matrix. Since the mesh is now effectively at P_world origin but translated by position=C,
-                    // applying matrix M to the object works as: M * Translate(C) * Vertices.
-                    // This correctly transforms the model in World Space.
-                    sourceClone.applyMatrix4(m);
+                    // Prefer visual pose that was cached from the last successful alignment
+                    // so the model jumps back to the exact same displayed position.
+                    const visualPose = ensureTransformVisualPose(manualState.transform);
+                    if (visualPose) {
+                        const rotMat = buildRotationMatrix4(visualPose.rotation);
+                        sourceClone.scale.setScalar(visualPose.scale || S_dst);
+                        sourceClone.setRotationFromMatrix(rotMat);
+                        sourceClone.position.set(
+                            visualPose.position[0],
+                            visualPose.position[1],
+                            visualPose.position[2]
+                        );
+                    } else {
+                        sourceClone.scale.setScalar(S_dst);
+                    }
+                } else {
+                    // No transform, just use same scale
+                    sourceClone.scale.setScalar(S_dst);
                 }
 
                 // Add to registration viewer's unified rotation group
                 if (registrationViewer.scene && registrationViewer.rotationGroup) {
-                    // Clear previous group children
+                    // Clear previous
                     while (registrationViewer.rotationGroup.children.length > 0) {
                         registrationViewer.rotationGroup.remove(registrationViewer.rotationGroup.children[0]);
                     }
 
-                    // --- Fix Rotation Pivot (REG-02.3) ---
-                    // By default, the group rotates around (0,0,0). 
-                    // If models are far from origin, they "orbit" instead of rotating in place.
-                    // Solution: Position the group at the model center, and offset the meshes locally.
-                    const pivot = targetViewer.modelCenter.clone();
+                    // Reset rotation group to origin (no pivot offset)
+                    registrationViewer.rotationGroup.position.set(0, 0, 0);
+                    registrationViewer.rotationGroup.rotation.set(0, 0, 0);
 
-                    registrationViewer.rotationGroup.position.copy(pivot);
-                    registrationViewer.rotationGroup.rotation.set(0, 0, 0); // Reset for new registration
-
-                    // Adjust mesh positions to be relative to the group center (pivot)
-                    targetClone.position.sub(pivot); // Effectively (0,0,0) locally
-                    sourceClone.position.sub(pivot); // Transformed position relative to target center
-
+                    // Add clones to group
                     registrationViewer.rotationGroup.add(sourceClone);
                     registrationViewer.rotationGroup.add(targetClone);
 
@@ -550,14 +594,22 @@ async function switchToRegistrationOverlayView() {
                     // Set visual properties
                     sourceClone.visible = true;
                     targetClone.visible = true;
-                    if (sourceClone.material) sourceClone.material.opacity = 0.8;
-                    if (targetClone.material) targetClone.material.opacity = 0.6;
+                    if (sourceClone.material) {
+                        sourceClone.material = sourceClone.material.clone();
+                        sourceClone.material.transparent = true;
+                        sourceClone.material.opacity = 0.8;
+                    }
+                    if (targetClone.material) {
+                        targetClone.material = targetClone.material.clone();
+                        targetClone.material.transparent = true;
+                        targetClone.material.opacity = 0.6;
+                    }
 
-                    // Fit camera to show the restored world-space models
+                    // Fit camera
                     registrationViewer.fitCameraToObjects();
 
-                    console.log('✓ Models added to unified rotation group with centered pivot');
-                    showValidationMessage('Registration complete! Rotating models as a unit.', 'success');
+                    console.log('✓ Models added and aligned in overlay view');
+                    showValidationMessage('Alignment applied! Both models are now visible.', 'success');
                 }
             }
         }
@@ -713,9 +765,11 @@ async function load3DViewer() {
         // Trigger resize to ensure canvases are properly sized
         window.dispatchEvent(new Event('resize'));
 
-        // Enable Manual Registration button
+        // Enable Manual and Auto Registration buttons
         const manualRegBtn = document.getElementById('manualRegBtn');
+        const autoRegBtn = document.getElementById('autoRegBtn');
         if (manualRegBtn) manualRegBtn.disabled = false;
+        if (autoRegBtn) autoRegBtn.disabled = false;
 
         console.log('3D viewers loaded successfully');
     } catch (error) {
@@ -824,6 +878,7 @@ const manualState = {
     originalSourceMatrix: null,
     transform: null
 };
+window.manualState = manualState;
 
 // Event handlers for manual registration UI
 function setupManualRegistrationUI() {
@@ -894,6 +949,7 @@ function setupManualRegistrationUI() {
             if (!resp.ok) throw new Error(result.error || 'Compute failed');
 
             manualState.transform = result;
+            ensureTransformVisualPose(manualState.transform);
 
             // Step 2: Save the registered model to backend
             // (We do this now so the file exists, but we visualize using the computed matrix)
@@ -1223,10 +1279,12 @@ function setupOverlayControls() {
 
             refineBtn.addEventListener('click', async () => {
                 console.log('Refine button clicked');
-                console.log('Current Transform:', manualState.transform);
+                const state = window.manualState || {};
+                console.log('Current Transform:', state.transform);
 
-                if (!manualState.transform) {
-                    console.error('No transform found in state!');
+                if (!state.transform) {
+                    console.error('No transform found in window.manualState!');
+                    alert('Please run Auto Registration first or select points manually.');
                     return;
                 }
 
@@ -1238,8 +1296,8 @@ function setupOverlayControls() {
                     const payload = {
                         source_path: selectedSource.file_path,
                         target_path: selectedTarget.file_path,
-                        rotation: manualState.transform.rotation,
-                        translation: manualState.transform.translation
+                        rotation: state.transform.rotation,
+                        translation: state.transform.translation
                     };
                     console.log('Sending ICP payload:', payload);
 
@@ -1253,6 +1311,7 @@ function setupOverlayControls() {
                     });
 
                     const result = await resp.json();
+
                     if (!resp.ok) throw new Error(result.error || 'Refinement failed');
 
                     // Calculate RMSE improvement
@@ -1270,8 +1329,11 @@ function setupOverlayControls() {
                     manualState.transform = {
                         rotation: result.rotation,
                         translation: result.translation,
-                        rmse: result.rmse
+                        rmse: result.rmse,
+                        fitness: result.fitness,
+                        model_centers: manualState.transform?.model_centers || null
                     };
+                    ensureTransformVisualPose(manualState.transform);
 
                     console.log('Refinement successful:', result);
                     showValidationMessage(`Refined! RMSE: ${rmse_before.toFixed(3)} → ${rmse_after.toFixed(3)} (${improvement}% better)`, 'success');
@@ -1360,3 +1422,70 @@ window.addEventListener('DOMContentLoaded', () => {
     setupManualRegistrationUI();
     setupOverlayControls();
 });
+// Perform Auto Registration (Centroid + ICP)
+async function performAutoRegistration() {
+    try {
+        if (!selectedSource || !selectedTarget) {
+            alert("Please select both source and target models.");
+            return;
+        }
+
+        const autoRegBtn = document.getElementById('autoRegBtn');
+        const processingMsg = document.createElement('div');
+        processingMsg.id = 'autoRegProcessing';
+        processingMsg.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); color: white; padding: 20px; border-radius: 8px; z-index: 9999;';
+        processingMsg.textContent = 'Running Auto Registration... Please wait.';
+        document.body.appendChild(processingMsg);
+
+        if (autoRegBtn) autoRegBtn.disabled = true;
+
+        const response = await fetch(`${API_BASE}/patient/${selectedSource.patient_id}/register/auto`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source_path: selectedSource.file_path,
+                target_path: selectedTarget.file_path
+            })
+        });
+
+        const result = await response.json();
+
+        // Remove processing message
+        const msg = document.getElementById('autoRegProcessing');
+        if (msg) msg.remove();
+        if (autoRegBtn) autoRegBtn.disabled = false;
+
+        if (response.ok) {
+            console.log('Auto Registration Result:', result);
+
+            if (!result.rotation || !result.translation) {
+                throw new Error("Invalid response from server: rotation or translation missing");
+            }
+
+            // Sync with window.manualState for consistency
+            manualState.transform = {
+                rotation: result.rotation,
+                translation: result.translation,
+                rmse: result.rmse,
+                fitness: result.fitness,
+                model_centers: result.model_centers || null
+            };
+            ensureTransformVisualPose(manualState.transform);
+
+            alert(`Auto Registration Complete!\nRMSE: ${result.rmse.toFixed(4)}`);
+
+            // Switch to overlay view
+            await switchToRegistrationOverlayView();
+        } else {
+            alert(`Auto Registration Failed: ${result.error || 'Unknown error'}`);
+        }
+
+    } catch (error) {
+        console.error("Auto registration error:", error);
+        alert("An error occurred during auto registration.");
+        const msg = document.getElementById('autoRegProcessing');
+        if (msg) msg.remove();
+        const autoRegBtn = document.getElementById('autoRegBtn');
+        if (autoRegBtn) autoRegBtn.disabled = false;
+    }
+}
