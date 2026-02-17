@@ -212,6 +212,7 @@ def api_apply_registration(patient_id):
         source_path = data.get('source_path')
         rotation = data.get('rotation')
         translation = data.get('translation')
+        scale = float(data.get('scale', 1.0))
 
         if not source_path or not rotation or not translation:
             return jsonify({"error": "Missing source_path, rotation, or translation"}), 400
@@ -225,7 +226,7 @@ def api_apply_registration(patient_id):
 
         # Build 4x4 transform
         M = np.eye(4)
-        M[:3, :3] = np.array(rotation, dtype=float)
+        M[:3, :3] = np.array(rotation, dtype=float) * scale
         M[:3, 3] = np.array(translation, dtype=float)
 
         mesh.apply_transform(M)
@@ -693,6 +694,11 @@ def auto_register(patient_id):
         data = request.json
         source_path = data.get('source_path')
         target_path = data.get('target_path')
+        auto_mode = str(data.get('mode', 'strict')).lower()
+        if auto_mode not in ('strict', 'relaxed'):
+            auto_mode = 'strict'
+        auto_scale_normalize = bool(data.get('auto_scale_normalize', False))
+        scale_correction = float(data.get('scale_correction', 1.0))
 
         if not source_path or not target_path:
             return jsonify({"error": "Missing source or target path"}), 400
@@ -708,6 +714,9 @@ def auto_register(patient_id):
         # 1. Load meshes
         src_mesh = trimesh.load(full_source, process=False)
         dst_mesh = trimesh.load(full_target, process=False)
+        if auto_scale_normalize and abs(scale_correction - 1.0) > 1e-3:
+            print(f"Applying auto scale normalization to source: scale={scale_correction:.6f}")
+            src_mesh.apply_scale(scale_correction)
         
         # 2. SYNCED PRE-ALIGNMENT (AABB logic matching Three.js)
         c_src = get_aabb_center(src_mesh)
@@ -728,7 +737,7 @@ def auto_register(patient_id):
 
         # Always run multiple auto attempts and choose best (no manual fallback gate here).
         strategies = []
-        roi_radii = [35.0, 45.0, 55.0, 70.0, 85.0]
+        roi_radii = [35.0, 45.0, 55.0, 70.0, 85.0, 95.0, 110.0]
         t_center = c_dst - c_src
         if source_is_jaw:
             for r in roi_radii:
@@ -813,9 +822,9 @@ def auto_register(patient_id):
 
             # Fast ranking pass, then expensive multiscale only on top seeds
             ranked = rank_init_candidates_fast(
-                source_pcd, target_pcd, init_candidates, voxel_size, top_k=12
+                source_pcd, target_pcd, init_candidates, voxel_size, top_k=20
             )
-            ranked_inits = [M for _, _, M in ranked] if ranked else init_candidates[:12]
+            ranked_inits = [M for _, _, M in ranked] if ranked else init_candidates[:20]
 
             best_local_result = None
             best_local_M = None
@@ -928,21 +937,44 @@ def auto_register(patient_id):
         else:
             raise RuntimeError("Auto registration: no candidate produced")
 
+        sorted_diag = sorted(diagnostics, key=lambda d: d["score"])
+        top3_candidates = sorted_diag[:3]
+
+        if auto_mode == "strict" and selection_mode == "fallback_prealign":
+            return jsonify({
+                "error": "Auto strict failed: no valid candidate found (fallback prealign only).",
+                "reason": "no_valid_candidate",
+                "mode": auto_mode,
+                "selection_mode": selection_mode,
+                "low_confidence": True,
+                "quality_gate": {
+                    "passed": False,
+                    "reason": "fallback_prealign_disallowed_in_strict"
+                },
+                "attempt_count": len(strategies),
+                "attempt_diagnostics": sorted_diag[:12],
+                "top3_candidates": top3_candidates
+            }), 422
+
         M_total = chosen["M_total"]
         rmse_val = chosen["rmse"]
         fitness_val = chosen["fitness"]
         rmse_gate = max(chosen["roi_extent"] * 0.015, 1.2)
         fitness_gate = 0.20
+        overlap_gate = 0.30 if auto_mode == "strict" else 0.20
+        center_dist_gate = 40.0 if auto_mode == "strict" else 30.0
+        p90_gate = 40.0 if auto_mode == "strict" else 30.0
         quality_passed = (
             (rmse_val <= rmse_gate) and
             (fitness_val >= fitness_gate) and
-            (chosen["overlap"] >= 0.30) and
-            (chosen["center_dist"] <= 40.0)
+            (chosen["overlap"] >= overlap_gate) and
+            (chosen["center_dist"] <= center_dist_gate) and
+            (chosen["p90_sym"] <= p90_gate)
         )
         low_confidence = not quality_passed
 
         print(
-            f"Auto best strategy={chosen['strategy']}, seed={chosen['best_seed_index']}, mode={selection_mode}, "
+            f"Auto best strategy={chosen['strategy']}, seed={chosen['best_seed_index']}, mode={selection_mode}, auto_mode={auto_mode}, "
             f"rmse={rmse_val:.4f}, fitness={fitness_val:.4f}, "
             f"median={chosen['median_sym']:.4f}, p90={chosen['p90_sym']:.4f}, "
             f"overlap={chosen['overlap']:.4f}, center_dist={chosen['center_dist']:.4f}, "
@@ -952,6 +984,7 @@ def auto_register(patient_id):
         return jsonify({
             "rotation": M_total[:3, :3].tolist(),
             "translation": M_total[:3, 3].tolist(),
+            "scale": float(scale_correction if auto_scale_normalize else 1.0),
             "rmse": rmse_val,
             "fitness": fitness_val,
             "overlap": float(chosen["overlap"]),
@@ -960,15 +993,18 @@ def auto_register(patient_id):
             "quality_gate": {
                 "rmse_max": float(rmse_gate),
                 "fitness_min": float(fitness_gate),
-                "overlap_min": 0.30,
-                "center_dist_max": 40.0,
+                "overlap_min": float(overlap_gate),
+                "center_dist_max": float(center_dist_gate),
+                "p90_sym_max": float(p90_gate),
                 "passed": bool(quality_passed)
             },
+            "mode": auto_mode,
             "best_strategy": chosen["strategy"],
             "best_seed_index": int(chosen["best_seed_index"]),
             "selection_mode": selection_mode,
             "attempt_count": len(strategies),
-            "attempt_diagnostics": sorted(diagnostics, key=lambda d: d["score"])[:12],
+            "attempt_diagnostics": sorted_diag[:12],
+            "top3_candidates": top3_candidates,
             "model_centers": {
                 "source": c_src.tolist(),
                 "target": c_dst.tolist()
@@ -992,6 +1028,7 @@ def refine_icp(patient_id):
         target_path = data.get('target_path')
         curr_rot = data.get('rotation') 
         curr_trans = data.get('translation')
+        curr_scale = float(data.get('scale', 1.0))
 
         if not source_path or not target_path or curr_rot is None:
             return jsonify({"error": "Missing required data"}), 400
@@ -1007,6 +1044,8 @@ def refine_icp(patient_id):
 
         src_mesh = trimesh.load(os.path.join(ROOT_FOLDER, source_path), process=False)
         dst_mesh = trimesh.load(os.path.join(ROOT_FOLDER, target_path), process=False)
+        if abs(curr_scale - 1.0) > 1e-3:
+            src_mesh.apply_scale(curr_scale)
 
         src_extent = np.max(src_mesh.extents)
         dst_extent = np.max(dst_mesh.extents)
@@ -1108,6 +1147,7 @@ def refine_icp(patient_id):
         return jsonify({
             "rotation": M_final[:3, :3].tolist(),
             "translation": M_final[:3, 3].tolist(),
+            "scale": curr_scale,
             "rmse": rmse_val,
             "fitness": fitness_val,
             "overlap": overlap_val,
@@ -1154,6 +1194,22 @@ def similarity_check(patient_id):
         if len(src_pts) == 0 or len(dst_pts) == 0:
             return jsonify({"error": "Empty mesh vertices"}), 400
 
+        # Applicability guard: similarity scale check is meaningful only for comparable-sized shapes.
+        src_max_extent = float(np.max(src_mesh.extents))
+        dst_max_extent = float(np.max(dst_mesh.extents))
+        extent_ratio = src_max_extent / max(dst_max_extent, 1e-9)
+        applicable = 0.5 <= extent_ratio <= 2.0
+
+        if not applicable:
+            return jsonify({
+                "applicable": False,
+                "reason": "non_comparable_extent",
+                "extent_ratio": float(extent_ratio),
+                "likely_scale_mismatch": False,
+                "scale": 1.0,
+                "scale_drift": 0.0
+            })
+
         # Optional rigid init to improve nearest-neighbor pairing.
         if init_rot is not None:
             M = np.eye(4)
@@ -1184,6 +1240,7 @@ def similarity_check(patient_id):
         s, R, t = estimate_similarity_umeyama(src_sub, nn)
         drift = abs(s - 1.0)
         return jsonify({
+            "applicable": True,
             "scale": float(s),
             "scale_drift": float(drift),
             "likely_scale_mismatch": bool(drift > 0.03),

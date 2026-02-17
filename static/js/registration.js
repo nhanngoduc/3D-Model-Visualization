@@ -46,6 +46,7 @@ function computeVisualPoseFromTransform(transform) {
     const centerSrc = sourceViewer.modelCenter || new THREE.Vector3(0, 0, 0);
     const centerDst = targetViewer.modelCenter || new THREE.Vector3(0, 0, 0);
     const globalScale = getGlobalDisplayScale();
+    const similarityScale = Number(transform.scale || 1.0);
 
     const rotMat = buildRotationMatrix4(transform.rotation);
     const tGlobal = new THREE.Vector3(
@@ -53,13 +54,13 @@ function computeVisualPoseFromTransform(transform) {
         transform.translation[1],
         transform.translation[2]
     );
-    const rotatedCenterSrc = centerSrc.clone().applyMatrix4(rotMat);
+    const rotatedCenterSrc = centerSrc.clone().applyMatrix4(rotMat).multiplyScalar(similarityScale);
     const tVisual = rotatedCenterSrc.add(tGlobal).sub(centerDst).multiplyScalar(globalScale);
 
     return {
         rotation: transform.rotation,
         position: [tVisual.x, tVisual.y, tVisual.z],
-        scale: globalScale
+        scale: globalScale * similarityScale
     };
 }
 
@@ -88,6 +89,10 @@ function updateRegistrationDebugPanel(title, metrics) {
     const debug = ensureRegistrationDebugPanel();
     if (!debug) return;
     const gate = metrics?.quality_gate || {};
+    const top3 = metrics?.top3_candidates || (Array.isArray(metrics?.attempt_diagnostics) ? metrics.attempt_diagnostics.slice(0, 3) : []);
+    const top3Text = top3.length
+        ? top3.map((c, i) => `${i + 1}) ${c.strategy || '-'} | seed=${c.best_seed_index ?? c.seed_index ?? '-'} | score=${c.score} | overlap=${c.overlap}`).join('\n')
+        : '-';
     debug.textContent =
 `[${title}]
 rmse=${metrics?.rmse}
@@ -98,7 +103,9 @@ best_strategy=${metrics?.best_strategy ?? '-'}
 best_seed_index=${metrics?.best_seed_index ?? metrics?.seed_index ?? '-'}
 refine_branch=${metrics?.refine_branch ?? '-'}
 gate_passed=${gate?.passed}
-low_confidence=${metrics?.low_confidence}`;
+low_confidence=${metrics?.low_confidence}
+top3:
+${top3Text}`;
 }
 
 function resetRegistrationTransformState(reason = 'context-change') {
@@ -1017,7 +1024,10 @@ function setupManualRegistrationUI() {
             const result = await resp.json();
             if (!resp.ok) throw new Error(result.error || 'Compute failed');
 
-            manualState.transform = result;
+            manualState.transform = {
+                ...result,
+                scale: 1.0
+            };
             ensureTransformVisualPose(manualState.transform);
 
             // Step 2: Save the registered model to backend
@@ -1028,7 +1038,8 @@ function setupManualRegistrationUI() {
                 body: JSON.stringify({
                     source_path: selectedSource.file_path,
                     rotation: manualState.transform.rotation,
-                    translation: manualState.transform.translation
+                    translation: manualState.transform.translation,
+                    scale: manualState.transform.scale || 1.0
                 })
             });
 
@@ -1352,9 +1363,10 @@ function setupOverlayControls() {
             refineBtn.addEventListener('click', async () => {
                 console.log('Refine button clicked');
                 const state = window.manualState || {};
-                console.log('Current Transform:', state.transform);
+                const initTransform = state.transform || state.candidateTransform || null;
+                console.log('Current Transform:', initTransform);
 
-                if (!state.transform) {
+                if (!initTransform) {
                     console.error('No transform found in window.manualState!');
                     alert('Please run Auto Registration first or select points manually.');
                     return;
@@ -1368,8 +1380,9 @@ function setupOverlayControls() {
                     const payload = {
                         source_path: selectedSource.file_path,
                         target_path: selectedTarget.file_path,
-                        rotation: state.transform.rotation,
-                        translation: state.transform.translation
+                        rotation: initTransform.rotation,
+                        translation: initTransform.translation,
+                        scale: initTransform.scale || 1.0
                     };
                     console.log('Sending ICP payload:', payload);
 
@@ -1387,7 +1400,7 @@ function setupOverlayControls() {
                     if (!resp.ok) throw new Error(result.error || 'Refinement failed');
 
                     // Calculate RMSE improvement
-                    const rmse_before = manualState.transform.rmse || 0;
+                    const rmse_before = initTransform.rmse || 0;
                     const rmse_after = result.rmse || 0;
                     const improvement = rmse_before > 0 ? ((rmse_before - rmse_after) / rmse_before * 100).toFixed(1) : 0;
 
@@ -1401,13 +1414,14 @@ function setupOverlayControls() {
                     const refinedCandidate = {
                         rotation: result.rotation,
                         translation: result.translation,
+                        scale: result.scale || (initTransform.scale || 1.0),
                         rmse: result.rmse,
                         fitness: result.fitness,
                         overlap: result.overlap,
                         center_dist: result.center_dist,
                         low_confidence: result.low_confidence,
                         quality_gate: result.quality_gate || null,
-                        model_centers: manualState.transform?.model_centers || null
+                        model_centers: initTransform?.model_centers || null
                     };
                     ensureTransformVisualPose(refinedCandidate);
 
@@ -1442,7 +1456,8 @@ function setupOverlayControls() {
                             body: JSON.stringify({
                                 source_path: selectedSource.file_path,
                                 rotation: result.rotation,
-                                translation: result.translation
+                                translation: result.translation,
+                                scale: refinedCandidate.scale || 1.0
                             })
                         });
                     }
@@ -1534,7 +1549,8 @@ async function performAutoRegistration() {
 
         if (autoRegBtn) autoRegBtn.disabled = true;
 
-        const response = await fetch(`${API_BASE}/patient/${selectedSource.patient_id}/register/auto`, {
+        // Preflight similarity check (scale drift)
+        const preflightResp = await fetch(`${API_BASE}/patient/${selectedSource.patient_id}/register/similarity-check`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1542,8 +1558,65 @@ async function performAutoRegistration() {
                 target_path: selectedTarget.file_path
             })
         });
+        const preflight = await preflightResp.json();
+        let useAutoScaleNormalize = false;
+        let scaleCorrection = 1.0;
+        if (preflightResp.ok && preflight.applicable && preflight.likely_scale_mismatch) {
+            useAutoScaleNormalize = true;
+            scaleCorrection = Number(preflight.scale || 1.0);
+            updateRegistrationDebugPanel('Preflight', preflight);
+            showValidationMessage(`Scale drift detected. Auto will normalize source scale (s=${scaleCorrection.toFixed(4)}).`, 'warning');
+        }
 
-        const result = await response.json();
+        const runAuto = async (mode) => {
+            const resp = await fetch(`${API_BASE}/patient/${selectedSource.patient_id}/register/auto`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    source_path: selectedSource.file_path,
+                    target_path: selectedTarget.file_path,
+                    mode,
+                    auto_scale_normalize: useAutoScaleNormalize,
+                    scale_correction: scaleCorrection
+                })
+            });
+            const data = await resp.json();
+            return { resp, data };
+        };
+
+        // 1) Strict auto (hard gate)
+        let { resp: response, data: result } = await runAuto('strict');
+        if (!response.ok) {
+            console.warn('Auto strict failed, trying relaxed init mode:', result);
+            updateRegistrationDebugPanel('Auto Strict', result || {});
+            // 2) Relaxed auto (init-only candidate, never commit/save directly)
+            const relaxedRun = await runAuto('relaxed');
+            response = relaxedRun.resp;
+            result = relaxedRun.data;
+            if (response.ok && result.rotation && result.translation) {
+                const relaxedCandidate = {
+                    rotation: result.rotation,
+                    translation: result.translation,
+                    rmse: result.rmse,
+                    fitness: result.fitness,
+                    overlap: result.overlap,
+                    center_dist: result.center_dist,
+                    low_confidence: true,
+                    quality_gate: result.quality_gate || null,
+                    model_centers: result.model_centers || null
+                };
+                ensureTransformVisualPose(relaxedCandidate);
+                manualState.candidateTransform = relaxedCandidate;
+                updateRegistrationDebugPanel('Auto Relaxed (Init Only)', result);
+                showValidationMessage('Auto strict failed. Relaxed init candidate prepared; provide manual seed / run refine.', 'warning');
+            } else {
+                alert(`Auto Registration Failed: ${(result && result.error) || 'Unknown error'}`);
+            }
+            const failMsg = document.getElementById('autoRegProcessing');
+            if (failMsg) failMsg.remove();
+            if (autoRegBtn) autoRegBtn.disabled = false;
+            return;
+        }
 
         // Remove processing message
         const msg = document.getElementById('autoRegProcessing');
