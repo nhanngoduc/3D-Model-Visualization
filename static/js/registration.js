@@ -11,6 +11,32 @@ let allPatients = [];
 let currentPatientData = {};
 let selectedSource = null;
 let selectedTarget = null;
+let registrationQuality = {
+    passed: false,
+    low_confidence: true,
+    metrics: null,
+    context: 'none'
+};
+const semiAutoState = {
+    pairs: [],
+    coarseInit: null,
+    diagnostics: null,
+    previewSourceMarkers: [],
+    previewTargetMarkers: [],
+    profile: 'default',
+    deviceProfile: 'standard',
+    suggestionMode: 'correspondence_v3',
+    thresholds: null
+};
+const semiAutoSessionMetrics = {
+    startedAt: null,
+    suggestCount: 0,
+    acceptedPairs: 0,
+    editedPairs: 0,
+    reruns: 0,
+    completed: 0,
+    lastDurationSec: null
+};
 
 // Initialize
 async function initRegistration() {
@@ -197,6 +223,14 @@ function setupEventListeners() {
 
     sourceModelSelect.addEventListener('change', (e) => {
         selectedSource = e.target.value ? JSON.parse(e.target.value) : null;
+        semiAutoSessionMetrics.startedAt = null;
+        semiAutoSessionMetrics.suggestCount = 0;
+        semiAutoSessionMetrics.acceptedPairs = 0;
+        semiAutoSessionMetrics.editedPairs = 0;
+        semiAutoSessionMetrics.reruns = 0;
+        semiAutoSessionMetrics.completed = 0;
+        semiAutoSessionMetrics.lastDurationSec = null;
+        updateSemiAutoAdaptiveHint('');
         validateSelection();
         // If both selected and they point to the same file, allow proceeding with a warning
         if (selectedSource && selectedTarget && selectedSource.file_path === selectedTarget.file_path) {
@@ -218,6 +252,14 @@ function setupEventListeners() {
 
     targetModelSelect.addEventListener('change', (e) => {
         selectedTarget = e.target.value ? JSON.parse(e.target.value) : null;
+        semiAutoSessionMetrics.startedAt = null;
+        semiAutoSessionMetrics.suggestCount = 0;
+        semiAutoSessionMetrics.acceptedPairs = 0;
+        semiAutoSessionMetrics.editedPairs = 0;
+        semiAutoSessionMetrics.reruns = 0;
+        semiAutoSessionMetrics.completed = 0;
+        semiAutoSessionMetrics.lastDurationSec = null;
+        updateSemiAutoAdaptiveHint('');
         validateSelection();
         // If both selected and they point to the same file, allow proceeding with a warning
         if (selectedSource && selectedTarget && selectedSource.file_path === selectedTarget.file_path) {
@@ -317,6 +359,114 @@ function showValidationMessage(message, type) {
     validationMessage.style.display = 'block';
 }
 
+function updateFinishButtonGate(passed, reason = '') {
+    const finishBtn = document.getElementById('finishRegBtn');
+    if (!finishBtn) return;
+    finishBtn.disabled = !passed;
+    finishBtn.title = passed ? '' : (reason || 'Finish is blocked until quality gate passes.');
+}
+
+function setRegistrationQuality(result, context = 'unknown') {
+    const gatePassed = result && result.quality_gate ? !!result.quality_gate.passed : false;
+    const lowConfidence = !!(result && result.low_confidence);
+    registrationQuality = {
+        passed: gatePassed && !lowConfidence,
+        low_confidence: lowConfidence,
+        metrics: result || null,
+        context
+    };
+
+    const info = document.getElementById('registrationResultInfo');
+    if (info) {
+        if (registrationQuality.passed) {
+            info.style.borderColor = 'rgba(76, 175, 80, 0.3)';
+            info.style.background = 'rgba(76, 175, 80, 0.1)';
+            info.style.color = '#4caf50';
+            info.innerHTML = '<strong>✓ Registration Passed Quality Gate</strong><p style="margin: 8px 0 0 0; font-size: 0.85rem;">Alignment quality is acceptable. You can finish and save.</p>';
+        } else {
+            info.style.borderColor = 'rgba(255, 193, 7, 0.35)';
+            info.style.background = 'rgba(255, 193, 7, 0.12)';
+            info.style.color = '#ffd166';
+            info.innerHTML = `<strong>Quality Gate Failed (${context})</strong><p style="margin: 8px 0 0 0; font-size: 0.85rem;">Please add 1-2 more point pairs and re-run refine before finishing.</p>`;
+        }
+    }
+
+    updateFinishButtonGate(registrationQuality.passed);
+}
+
+function getAdaptiveGuidance(result) {
+    if (!result) return '';
+    const overlap = Number(result.overlap || 0);
+    const centerDist = Number(result.center_dist || 0);
+    const rmse = Number(result.rmse || 0);
+    if (overlap < 0.18) {
+        return 'Hint: overlap is low. Add 1-2 pairs spread wider (left-right + front teeth).';
+    }
+    if (centerDist > 40) {
+        return 'Hint: center distance is high. Add one front and one posterior landmark pair.';
+    }
+    if (rmse > 3.0) {
+        return 'Hint: RMSE is high. Replace a noisy pair and prefer cusp/incisal points.';
+    }
+    return 'Hint: add one extra stable pair and re-run refine.';
+}
+
+function updateSemiAutoAdaptiveHint(text) {
+    const el = document.getElementById('semiAutoAdaptiveHint');
+    if (!el) return;
+    el.textContent = text || '';
+}
+
+async function refreshSemiAutoMetricsBadge() {
+    const badge = document.getElementById('semiAutoMetricsBadge');
+    if (!badge || !selectedSource) return;
+    const elapsed = semiAutoSessionMetrics.startedAt
+        ? Math.max(0, Math.round((Date.now() - semiAutoSessionMetrics.startedAt) / 1000))
+        : 0;
+
+    let backend = null;
+    try {
+        const resp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/metrics`);
+        backend = await resp.json();
+    } catch (e) {
+        backend = null;
+    }
+
+    const lines = [
+        `session reruns=${semiAutoSessionMetrics.reruns}, edits=${semiAutoSessionMetrics.editedPairs}, t=${elapsed}s`,
+        `accepted=${semiAutoSessionMetrics.acceptedPairs}, success=${semiAutoSessionMetrics.completed}`
+    ];
+    if (backend && typeof backend.gate_pass_rate === 'number') {
+        lines.push(`backend pass=${(backend.gate_pass_rate * 100).toFixed(1)}%, avg_rmse=${backend.avg_rmse ?? '-'}`);
+    }
+    badge.textContent = lines.join(' | ');
+}
+
+async function reportSemiAutoSession(lastGatePassed) {
+    if (!selectedSource || !selectedTarget) return;
+    try {
+        await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/semi_auto/report`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                source_path: selectedSource.file_path,
+                target_path: selectedTarget.file_path,
+                profile: semiAutoState.profile,
+                device_profile: semiAutoState.deviceProfile,
+                suggest_count: semiAutoSessionMetrics.suggestCount,
+                accepted_pairs: semiAutoSessionMetrics.acceptedPairs,
+                edited_pairs: semiAutoSessionMetrics.editedPairs,
+                reruns: semiAutoSessionMetrics.reruns,
+                completed: semiAutoSessionMetrics.completed,
+                time_to_finish_sec: semiAutoSessionMetrics.lastDurationSec,
+                last_gate_passed: !!lastGatePassed
+            })
+        });
+    } catch (e) {
+        // best-effort telemetry
+    }
+}
+
 // REG-01.3: Swap source and target
 function swapModels() {
     const sourcePatient = document.getElementById('sourcePatient');
@@ -356,6 +506,8 @@ function swapModels() {
 
             selectedSource = sourceModel.value ? JSON.parse(sourceModel.value) : null;
             selectedTarget = targetModel.value ? JSON.parse(targetModel.value) : null;
+            registrationQuality = { passed: false, low_confidence: true, metrics: null, context: 'swap' };
+            updateFinishButtonGate(false, 'Run registration again after swapping models.');
 
             validateSelection();
         }, 50);
@@ -428,6 +580,7 @@ function backToSelection() {
     if (selectionView) selectionView.style.display = 'flex';
 
     // Reset validation but keep selections
+    clearSemiAutoPreviewMarkers();
     validateSelection();
 }
 
@@ -449,6 +602,7 @@ async function switchToRegistrationOverlayView() {
 
         if (viewerContainer) viewerContainer.style.display = 'block';
         if (overlayControls) overlayControls.style.display = 'block';
+        updateFinishButtonGate(registrationQuality.passed, 'Finish is blocked until quality gate passes.');
 
         // Initialize registration overlay viewer if not already done
         if (!registrationViewer) {
@@ -482,8 +636,13 @@ async function switchToRegistrationOverlayView() {
                 // To restore P_orig: P_orig = (P/S) + C.
 
                 // TARGET MESH (Reference)
-                // Clone the mesh (shares geometry)
-                const targetClone = targetMesh.clone();
+                // Create clean clone without marker children from split-view.
+                const targetMaterial = Array.isArray(targetMesh.material)
+                    ? targetMesh.material.map(m => (m && typeof m.clone === 'function') ? m.clone() : m)
+                    : (targetMesh.material && typeof targetMesh.material.clone === 'function'
+                        ? targetMesh.material.clone()
+                        : targetMesh.material);
+                const targetClone = new THREE.Mesh(targetMesh.geometry, targetMaterial);
                 // Reset Rotation (crucial, as user might have rotated it)
                 targetClone.rotation.set(0, 0, 0);
                 // Reset Scale (it was scaled by S)
@@ -494,7 +653,12 @@ async function switchToRegistrationOverlayView() {
                 }
 
                 // SOURCE MESH (Transformed)
-                const sourceClone = sourceMesh.clone();
+                const sourceMaterial = Array.isArray(sourceMesh.material)
+                    ? sourceMesh.material.map(m => (m && typeof m.clone === 'function') ? m.clone() : m)
+                    : (sourceMesh.material && typeof sourceMesh.material.clone === 'function'
+                        ? sourceMesh.material.clone()
+                        : sourceMesh.material);
+                const sourceClone = new THREE.Mesh(sourceMesh.geometry, sourceMaterial);
                 sourceClone.rotation.set(0, 0, 0);
                 sourceClone.scale.setScalar(1);
                 if (sourceViewer.modelCenter) {
@@ -716,6 +880,11 @@ async function load3DViewer() {
         // Enable Manual Registration button
         const manualRegBtn = document.getElementById('manualRegBtn');
         if (manualRegBtn) manualRegBtn.disabled = false;
+        const semiAutoRegBtn = document.getElementById('semiAutoRegBtn');
+        if (semiAutoRegBtn) semiAutoRegBtn.disabled = false;
+        await loadSemiAutoProfileOptions();
+        registrationQuality = { passed: false, low_confidence: true, metrics: null, context: 'viewer_loaded' };
+        updateFinishButtonGate(false, 'Run Semi-Auto/Refine and pass quality gate.');
 
         console.log('3D viewers loaded successfully');
     } catch (error) {
@@ -828,6 +997,7 @@ const manualState = {
 // Event handlers for manual registration UI
 function setupManualRegistrationUI() {
     const manualRegBtn = document.getElementById('manualRegBtn');
+    const semiAutoRegBtn = document.getElementById('semiAutoRegBtn');
     const manualModal = document.getElementById('manualRegModal');
     const closeManual = document.getElementById('closeManualModalBtn');
     const enterPickModeBtn = document.getElementById('enterPickModeBtn');
@@ -838,6 +1008,7 @@ function setupManualRegistrationUI() {
 
     // Disable manual reg button initially
     if (manualRegBtn) manualRegBtn.disabled = true;
+    if (semiAutoRegBtn) semiAutoRegBtn.disabled = true;
 
     manualRegBtn.addEventListener('click', () => {
         manualModal.style.display = 'block';
@@ -894,30 +1065,72 @@ function setupManualRegistrationUI() {
             if (!resp.ok) throw new Error(result.error || 'Compute failed');
 
             manualState.transform = result;
+            setRegistrationQuality({ low_confidence: true, quality_gate: { passed: false } }, 'manual_coarse');
 
-            // Step 2: Save the registered model to backend
-            // (We do this now so the file exists, but we visualize using the computed matrix)
+            // Explicitly log the Coarse (Manual) RMSE as requested
+            console.log('=== MANUAL REGISTRATION RESULTS ===');
+            console.log(`RMSE (Coarse): ${result.rmse.toFixed(4)}`);
+            if (typeof result.inlier_count === 'number') {
+                console.log(`Inliers: ${result.inlier_count}/${result.total_points}`);
+            }
+            console.log('===================================');
+
+            // Step 2: Auto refine immediately using coarse init
+            const refineResp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/icp`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    source_path: selectedSource.file_path,
+                    target_path: selectedTarget.file_path,
+                    rotation: manualState.transform.rotation,
+                    translation: manualState.transform.translation,
+                    flow: 'manual_compute_auto_refine',
+                    profile: semiAutoState.profile,
+                    device_profile: semiAutoState.deviceProfile
+                })
+            });
+            const refined = await refineResp.json();
+            if (!refineResp.ok) throw new Error(refined.error || 'Refine after manual compute failed');
+
+            const gatePassed = refined.quality_gate ? !!refined.quality_gate.passed : false;
+            const lowConfidence = !!refined.low_confidence || !gatePassed;
+
+            manualState.transform = {
+                rotation: refined.rotation,
+                translation: refined.translation,
+                rmse: refined.rmse
+            };
+            setRegistrationQuality(refined, 'manual_refine');
+
+            if (lowConfidence) {
+                // Show current best candidate in overlay (for inspection), but keep Finish blocked by gate.
+                computeBtn.textContent = originalText;
+                computeBtn.disabled = false;
+                const manualModal = document.getElementById('manualRegModal');
+                if (manualModal) manualModal.style.display = 'none';
+                exitPickMode();
+                if (manualModal) manualModal.style.display = 'none';
+                await switchToRegistrationOverlayView();
+                showValidationMessage(
+                    `Refine gate failed after manual points. RMSE=${(refined.rmse || 0).toFixed(3)}, overlap=${((refined.overlap || 0) * 100).toFixed(1)}%. Candidate shown; add 1-2 more pairs and refine again.`,
+                    'warning'
+                );
+                updateSemiAutoAdaptiveHint(getAdaptiveGuidance(refined));
+                return;
+            }
+
+            // Step 3: Save only when refined gate passes.
             const applyResp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/apply`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     source_path: selectedSource.file_path,
-                    rotation: manualState.transform.rotation,
-                    translation: manualState.transform.translation
+                    rotation: refined.rotation,
+                    translation: refined.translation
                 })
             });
-
             const applyResult = await applyResp.json();
             if (!applyResp.ok) throw new Error(applyResult.error || 'Save failed');
-
-            console.log('Backend registration successful:', applyResult);
-
-            // Explicitly log the Coarse (Manual) RMSE as requested
-            console.log('=== MANUAL REGISTRATION RESULTS ===');
-            console.log(`RMSE (Coarse): ${result.rmse.toFixed(4)}`);
-            console.log('===================================');
-
-            showValidationMessage(`✓ Registration successful! RMSE=${result.rmse.toFixed(3)}`, 'success');
 
             // Restore button state
             computeBtn.textContent = originalText;
@@ -927,16 +1140,10 @@ function setupManualRegistrationUI() {
             const manualModal = document.getElementById('manualRegModal');
             if (manualModal) manualModal.style.display = 'none';
             exitPickMode();
-
-            // Switch from split view to combined overlay view
-            try {
-                await switchToRegistrationOverlayView();
-                // Only clear points if switch was successful (or partially so)
-                clearManualPoints();
-            } catch (switchError) {
-                console.error("View switch failed:", switchError);
-                showValidationMessage('Registration saved, but view switch failed: ' + switchError.message, 'warning');
-            }
+            await switchToRegistrationOverlayView();
+            clearManualPoints();
+            updateSemiAutoAdaptiveHint('');
+            showValidationMessage(`Manual+Refine passed. RMSE=${(refined.rmse || 0).toFixed(3)}`, 'success');
 
         } catch (err) {
             console.error('Registration error:', err);
@@ -1067,7 +1274,7 @@ function undoLastPoint() {
         manualState.sourcePoints.pop();
         const marker = manualState.sourceMarkers.pop();
         if (marker && splitViewViewer && splitViewViewer.sourceViewer) {
-            splitViewViewer.sourceViewer.scene.remove(marker);
+            splitViewViewer.sourceViewer.removeMarker(marker);
         }
 
         const list = document.getElementById('sourcePointsList');
@@ -1078,7 +1285,7 @@ function undoLastPoint() {
         manualState.targetPoints.pop();
         const marker = manualState.targetMarkers.pop();
         if (marker && splitViewViewer && splitViewViewer.targetViewer) {
-            splitViewViewer.targetViewer.scene.remove(marker);
+            splitViewViewer.targetViewer.removeMarker(marker);
         }
 
         const list = document.getElementById('targetPointsList');
@@ -1175,6 +1382,475 @@ function onPointPicked(side, threePoint) {
     updatePickOverlayCounts();
 }
 
+function renderSemiAutoPairsModal() {
+    const container = document.getElementById('semiAutoPairsList');
+    const diag = document.getElementById('semiAutoDiagnostics');
+    if (!container || !diag) return;
+
+    const d = semiAutoState.diagnostics || {};
+    const top = Array.isArray(d.top_candidates) ? d.top_candidates.slice(0, 3) : [];
+    const topTxt = top.length
+        ? `\nTop: ` + top.map((x, i) => `${i + 1}) ${Number(x.score || 0).toFixed(3)} ${x.reason || ''}`).join(' | ')
+        : '';
+    const t = semiAutoState.thresholds || {};
+    diag.textContent =
+        `ROI: ${d.roi_mode || '-'} | attempts: ${d.attempt_count || '-'} | strategy: ${(semiAutoState.coarseInit && semiAutoState.coarseInit.strategy) || '-'}\n` +
+        `profile=${semiAutoState.profile} | device=${semiAutoState.deviceProfile} | mode=${semiAutoState.suggestionMode} | gate(rmse<=${t.rmse_max ?? '-'}, overlap>=${t.overlap_min ?? '-'})${topTxt}`;
+
+    container.innerHTML = '';
+    semiAutoState.pairs.forEach((pair, idx) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;padding:8px;border-bottom:1px solid rgba(255,255,255,0.08);';
+        row.innerHTML = `
+            <input type="checkbox" class="semi-pair-keep" data-index="${idx}" checked />
+            <div>
+                <div style="font-weight:600;">Pair #${idx + 1} (conf ${(pair.confidence ?? 0).toFixed(2)})</div>
+                <div style="font-size:12px;color:#ccc;">S: (${pair.source_point.map(v => Number(v).toFixed(2)).join(', ')})</div>
+                <div style="font-size:12px;color:#ccc;">T: (${pair.target_point.map(v => Number(v).toFixed(2)).join(', ')})</div>
+            </div>
+            <button class="btn btn-small semi-pair-remove" data-index="${idx}" style="padding:4px 8px;">Delete</button>
+        `;
+        container.appendChild(row);
+    });
+
+    container.querySelectorAll('.semi-pair-remove').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const index = parseInt(e.currentTarget.dataset.index, 10);
+            semiAutoState.pairs.splice(index, 1);
+            semiAutoSessionMetrics.editedPairs += 1;
+            renderSemiAutoPairsModal();
+            refreshSemiAutoMetricsBadge();
+        });
+    });
+}
+
+function clearSemiAutoPreviewMarkers() {
+    if (!splitViewViewer || !splitViewViewer.sourceViewer || !splitViewViewer.targetViewer) return;
+    semiAutoState.previewSourceMarkers.forEach(m => splitViewViewer.sourceViewer.removeMarker(m));
+    semiAutoState.previewTargetMarkers.forEach(m => splitViewViewer.targetViewer.removeMarker(m));
+    semiAutoState.previewSourceMarkers = [];
+    semiAutoState.previewTargetMarkers = [];
+}
+
+function addSuggestMarkerSafe(viewer, pointVec3, color, label, options = {}) {
+    if (!viewer) return null;
+    if (options.pinned && typeof viewer.addPinnedDot === 'function') {
+        return viewer.addPinnedDot(pointVec3, color, 0.02);
+    }
+    const manualStyle = !!options.manualStyle;
+    // Keep semi-auto visualization identical to manual picking marker style when requested.
+    if (manualStyle && typeof viewer.addMarker === 'function') {
+        return viewer.addMarker(pointVec3, color, label);
+    }
+    if (typeof viewer.addStableMarker === 'function') {
+        return viewer.addStableMarker(pointVec3, color, label);
+    }
+    // Backward-compatible fallback if browser cached old splitViewViewer.js.
+    return viewer.addMarker(pointVec3, color, label);
+}
+
+function enhanceSuggestMarkerVisibility(marker, viewer = null) {
+    if (!marker) return;
+    // Force marker to be mesh-anchored (guards against legacy/cached scene-attached markers).
+    if (viewer && viewer.mesh && marker.userData && marker.userData.localPos) {
+        if (marker.parent !== viewer.mesh) {
+            const lp = marker.userData.localPos.clone ? marker.userData.localPos.clone() : new THREE.Vector3(
+                Number(marker.userData.localPos.x || 0),
+                Number(marker.userData.localPos.y || 0),
+                Number(marker.userData.localPos.z || 0)
+            );
+            if (marker.parent) marker.parent.remove(marker);
+            marker.position.copy(lp);
+            viewer.mesh.add(marker);
+        }
+    }
+    marker.renderOrder = 1200;
+    marker.userData.pixelRadius = Math.max(10, Number(marker.userData.pixelRadius || 0));
+    marker.userData.labelPixelSize = Math.max(24, Number(marker.userData.labelPixelSize || 0));
+    if (marker.material) {
+        marker.material.opacity = 1.0;
+        marker.material.transparent = true;
+        marker.material.depthTest = false;
+        marker.material.depthWrite = false;
+    }
+    if (marker.children && marker.children.length) {
+        marker.children.forEach((c) => {
+            if (c && c.material) {
+                c.renderOrder = 1201;
+                c.material.opacity = 1.0;
+                c.material.transparent = true;
+                c.material.depthTest = false;
+                c.material.depthWrite = false;
+            }
+        });
+    }
+}
+
+function showSemiAutoPreviewMarkers() {
+    if (!splitViewViewer || !splitViewViewer.sourceViewer || !splitViewViewer.targetViewer) return;
+    clearSemiAutoPreviewMarkers();
+    semiAutoState.pairs.forEach((pair, i) => {
+        const label = `S${i + 1}`;
+        const sRaw = pair.source_point.map(Number);
+        const tRaw = pair.target_point.map(Number);
+        const sSnap = splitViewViewer.sourceViewer.snapToSurface(
+            new THREE.Vector3(sRaw[0], sRaw[1], sRaw[2]),
+            3000000,
+            true
+        );
+        const tSnap = splitViewViewer.targetViewer.snapToSurface(
+            new THREE.Vector3(tRaw[0], tRaw[1], tRaw[2]),
+            3000000,
+            true
+        );
+        const s = [sSnap.x, sSnap.y, sSnap.z];
+        const t = [tSnap.x, tSnap.y, tSnap.z];
+        pair.source_point = s;
+        pair.target_point = t;
+        const sMarker = addSuggestMarkerSafe(
+            splitViewViewer.sourceViewer,
+            new THREE.Vector3(s[0], s[1], s[2]),
+            0xffc107,
+            null,
+            { manualStyle: true }
+        );
+        const tMarker = addSuggestMarkerSafe(
+            splitViewViewer.targetViewer,
+            new THREE.Vector3(t[0], t[1], t[2]),
+            0x5eead4,
+            null,
+            { manualStyle: true }
+        );
+        enhanceSuggestMarkerVisibility(sMarker, splitViewViewer.sourceViewer);
+        enhanceSuggestMarkerVisibility(tMarker, splitViewViewer.targetViewer);
+        semiAutoState.previewSourceMarkers.push(sMarker);
+        semiAutoState.previewTargetMarkers.push(tMarker);
+    });
+    console.log(`[SemiAuto] preview markers source=${semiAutoState.previewSourceMarkers.length}, target=${semiAutoState.previewTargetMarkers.length}`);
+}
+
+function getSemiAutoAcceptedPairs() {
+    const checks = document.querySelectorAll('#semiAutoPairsList .semi-pair-keep');
+    const accepted = [];
+    checks.forEach(chk => {
+        if (chk.checked) {
+            const i = parseInt(chk.dataset.index, 10);
+            if (semiAutoState.pairs[i]) accepted.push(semiAutoState.pairs[i]);
+        }
+    });
+    return accepted;
+}
+
+function loadPairsIntoManualEditor(pairs) {
+    clearManualPoints();
+    const sList = document.getElementById('sourcePointsList');
+    const tList = document.getElementById('targetPointsList');
+
+    pairs.forEach((pair, i) => {
+        const sRaw = pair.source_point.map(Number);
+        const tRaw = pair.target_point.map(Number);
+        const sSnap = splitViewViewer && splitViewViewer.sourceViewer
+            ? splitViewViewer.sourceViewer.snapToSurface(new THREE.Vector3(sRaw[0], sRaw[1], sRaw[2]), 3000000, true)
+            : new THREE.Vector3(sRaw[0], sRaw[1], sRaw[2]);
+        const tSnap = splitViewViewer && splitViewViewer.targetViewer
+            ? splitViewViewer.targetViewer.snapToSurface(new THREE.Vector3(tRaw[0], tRaw[1], tRaw[2]), 3000000, true)
+            : new THREE.Vector3(tRaw[0], tRaw[1], tRaw[2]);
+        const s = [sSnap.x, sSnap.y, sSnap.z];
+        const t = [tSnap.x, tSnap.y, tSnap.z];
+        pair.source_point = s;
+        pair.target_point = t;
+        manualState.sourcePoints.push(s);
+        manualState.targetPoints.push(t);
+
+        const sLi = document.createElement('li');
+        sLi.textContent = `(${s.map(v => v.toFixed(3)).join(', ')})`;
+        sList.appendChild(sLi);
+        const tLi = document.createElement('li');
+        tLi.textContent = `(${t.map(v => v.toFixed(3)).join(', ')})`;
+        tList.appendChild(tLi);
+
+        if (splitViewViewer && splitViewViewer.sourceViewer && splitViewViewer.targetViewer) {
+            const label = String(i + 1);
+            manualState.sourceMarkers.push(
+                addSuggestMarkerSafe(
+                    splitViewViewer.sourceViewer,
+                    new THREE.Vector3(s[0], s[1], s[2]),
+                    0xff0000,
+                    label,
+                    { manualStyle: true }
+                )
+            );
+            manualState.targetMarkers.push(
+                addSuggestMarkerSafe(
+                    splitViewViewer.targetViewer,
+                    new THREE.Vector3(t[0], t[1], t[2]),
+                    0x00ff00,
+                    label,
+                    { manualStyle: true }
+                )
+            );
+        }
+    });
+
+    updatePickOverlayCounts();
+    const computeBtn = document.getElementById('computeTransformBtn');
+    if (computeBtn) computeBtn.disabled = pairs.length < 3;
+}
+
+async function runSemiAutoPipeline(acceptedPairs) {
+    const sourcePatientId = encodeURIComponent(selectedSource.patient_id);
+    semiAutoSessionMetrics.reruns += 1;
+    semiAutoSessionMetrics.acceptedPairs = acceptedPairs.length;
+    await refreshSemiAutoMetricsBadge();
+
+    // Step 1: coarse transform from accepted pairs.
+    const coarseResp = await fetch(`${API_BASE}/patient/${sourcePatientId}/register/manual`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            source_points: acceptedPairs.map(p => p.source_point),
+            target_points: acceptedPairs.map(p => p.target_point)
+        })
+    });
+    const coarse = await coarseResp.json();
+    if (!coarseResp.ok) throw new Error(coarse.error || 'Semi-auto coarse transform failed');
+
+    manualState.transform = {
+        rotation: coarse.rotation,
+        translation: coarse.translation,
+        rmse: coarse.rmse
+    };
+
+    // Step 2: auto refine with ICP from coarse init.
+    const refineResp = await fetch(`${API_BASE}/patient/${sourcePatientId}/register/icp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            source_path: selectedSource.file_path,
+            target_path: selectedTarget.file_path,
+            rotation: coarse.rotation,
+            translation: coarse.translation,
+            flow: 'semi_auto',
+            profile: semiAutoState.profile,
+            device_profile: semiAutoState.deviceProfile
+        })
+    });
+    const refined = await refineResp.json();
+    if (!refineResp.ok) throw new Error(refined.error || 'Semi-auto refine failed');
+
+    const gatePassed = refined.quality_gate ? !!refined.quality_gate.passed : false;
+    const lowConfidence = !!refined.low_confidence;
+
+    manualState.transform = {
+        rotation: refined.rotation,
+        translation: refined.translation,
+        rmse: refined.rmse
+    };
+    setRegistrationQuality(refined, 'semi_auto');
+
+    if (!gatePassed || lowConfidence) {
+        const msg = `Semi-auto gate failed. RMSE=${(refined.rmse || 0).toFixed(3)}, overlap=${((refined.overlap || 0) * 100).toFixed(1)}%. Add 1-2 pairs and re-run.`;
+        showValidationMessage(msg, 'warning');
+        updateSemiAutoAdaptiveHint(getAdaptiveGuidance(refined));
+        loadPairsIntoManualEditor(acceptedPairs);
+        const manualModal = document.getElementById('manualRegModal');
+        if (manualModal) manualModal.style.display = 'block';
+        await reportSemiAutoSession(false);
+        await refreshSemiAutoMetricsBadge();
+        return { passed: false, refined };
+    }
+
+    // Step 3: save only when gate passes.
+    const applyResp = await fetch(`${API_BASE}/patient/${sourcePatientId}/register/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            source_path: selectedSource.file_path,
+            rotation: refined.rotation,
+            translation: refined.translation
+        })
+    });
+    const applyResult = await applyResp.json();
+    if (!applyResp.ok) throw new Error(applyResult.error || 'Save refined alignment failed');
+
+    await switchToRegistrationOverlayView();
+    semiAutoSessionMetrics.completed += 1;
+    if (semiAutoSessionMetrics.startedAt) {
+        semiAutoSessionMetrics.lastDurationSec = Math.max(0, Math.round((Date.now() - semiAutoSessionMetrics.startedAt) / 1000));
+    }
+    updateSemiAutoAdaptiveHint('');
+    await reportSemiAutoSession(true);
+    await refreshSemiAutoMetricsBadge();
+    showValidationMessage(
+        `Semi-auto passed. RMSE=${(refined.rmse || 0).toFixed(3)}, overlap=${((refined.overlap || 0) * 100).toFixed(1)}%.`,
+        'success'
+    );
+    return { passed: true, refined };
+}
+
+async function loadSemiAutoProfileOptions() {
+    const profileSelect = document.getElementById('semiAutoProfileSelect');
+    const deviceSelect = document.getElementById('semiAutoDeviceProfile');
+    if (!profileSelect || !deviceSelect || !selectedSource) return;
+    try {
+        const resp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/semi_auto/profiles`);
+        const data = await resp.json();
+        if (!resp.ok) return;
+
+        const profiles = data.profiles || {};
+        const devices = data.device_profiles || {};
+        profileSelect.innerHTML = '';
+        Object.keys(profiles).forEach(k => {
+            const opt = document.createElement('option');
+            opt.value = k;
+            opt.textContent = k;
+            profileSelect.appendChild(opt);
+        });
+        deviceSelect.innerHTML = '';
+        Object.keys(devices).forEach(k => {
+            const opt = document.createElement('option');
+            opt.value = k;
+            opt.textContent = k;
+            deviceSelect.appendChild(opt);
+        });
+        if (profiles[semiAutoState.profile]) profileSelect.value = semiAutoState.profile;
+        if (devices[semiAutoState.deviceProfile]) deviceSelect.value = semiAutoState.deviceProfile;
+    } catch (e) {
+        // fallback to static options in HTML
+    }
+}
+
+function setupSemiAutoUI() {
+    const semiBtn = document.getElementById('semiAutoRegBtn');
+    const semiModal = document.getElementById('semiAutoModal');
+    const semiToggleBtn = document.getElementById('semiAutoToggleBtn');
+    const closeBtn = document.getElementById('semiAutoCloseBtn');
+    const runBtn = document.getElementById('semiAutoRunBtn');
+    const editBtn = document.getElementById('semiAutoEditManualBtn');
+    const deviceSelect = document.getElementById('semiAutoDeviceProfile');
+    const profileSelect = document.getElementById('semiAutoProfileSelect');
+    const modeSelect = document.getElementById('semiAutoSuggestionMode');
+    const numPairsSelect = document.getElementById('semiAutoNumPairs');
+    if (!semiBtn || !semiModal || !semiToggleBtn || !closeBtn || !runBtn || !editBtn || !profileSelect || !modeSelect || !numPairsSelect || !deviceSelect) return;
+
+    const setSemiPanelMinimized = (minimized) => {
+        semiModal.classList.toggle('minimized', !!minimized);
+        semiToggleBtn.textContent = minimized ? 'Expand' : 'Minimize';
+    };
+    semiToggleBtn.addEventListener('click', () => {
+        setSemiPanelMinimized(!semiModal.classList.contains('minimized'));
+    });
+
+    profileSelect.addEventListener('change', () => {
+        semiAutoState.profile = profileSelect.value;
+    });
+    modeSelect.addEventListener('change', () => {
+        semiAutoState.suggestionMode = modeSelect.value;
+    });
+    deviceSelect.addEventListener('change', () => {
+        semiAutoState.deviceProfile = deviceSelect.value;
+    });
+
+    semiBtn.addEventListener('click', async () => {
+        if (!selectedSource || !selectedTarget) {
+            showValidationMessage('Please select source and target models first.', 'warning');
+            return;
+        }
+        if (!semiAutoSessionMetrics.startedAt) semiAutoSessionMetrics.startedAt = Date.now();
+        semiAutoSessionMetrics.suggestCount += 1;
+        updateSemiAutoAdaptiveHint('');
+        await refreshSemiAutoMetricsBadge();
+
+        semiBtn.disabled = true;
+        const original = semiBtn.textContent;
+        semiBtn.textContent = 'Suggesting...';
+        try {
+            const resp = await fetch(`${API_BASE}/patient/${encodeURIComponent(selectedSource.patient_id)}/register/semi_auto/suggest_points`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    source_path: selectedSource.file_path,
+                    target_path: selectedTarget.file_path,
+                    force_mouth_roi: true,
+                    num_pairs: parseInt(numPairsSelect.value, 10) || 3,
+                    profile: semiAutoState.profile,
+                    suggestion_mode: semiAutoState.suggestionMode,
+                    device_profile: semiAutoState.deviceProfile
+                })
+            });
+            const result = await resp.json();
+            if (!resp.ok) throw new Error(result.error || 'Suggest points failed');
+
+            semiAutoState.pairs = Array.isArray(result.pairs) ? result.pairs : [];
+            semiAutoState.coarseInit = result.coarse_init || null;
+            semiAutoState.diagnostics = result.diagnostics || null;
+            semiAutoState.profile = result.profile || semiAutoState.profile;
+            semiAutoState.deviceProfile = result.device_profile || semiAutoState.deviceProfile;
+            semiAutoState.thresholds = result.thresholds || null;
+            profileSelect.value = semiAutoState.profile;
+            deviceSelect.value = semiAutoState.deviceProfile;
+            renderSemiAutoPairsModal();
+            showSemiAutoPreviewMarkers();
+            setSemiPanelMinimized(false);
+            semiModal.style.display = 'block';
+            await refreshSemiAutoMetricsBadge();
+        } catch (err) {
+            showValidationMessage(`Semi-auto suggest failed: ${err.message}`, 'error');
+        } finally {
+            semiBtn.disabled = false;
+            semiBtn.textContent = original;
+        }
+    });
+
+    closeBtn.addEventListener('click', () => {
+        semiModal.style.display = 'none';
+        clearSemiAutoPreviewMarkers();
+        setSemiPanelMinimized(false);
+    });
+
+    editBtn.addEventListener('click', () => {
+        const accepted = getSemiAutoAcceptedPairs();
+        if (accepted.length < 3) {
+            alert('Keep at least 3 point pairs.');
+            return;
+        }
+        semiAutoSessionMetrics.acceptedPairs = accepted.length;
+        semiAutoSessionMetrics.editedPairs += Math.max(0, semiAutoState.pairs.length - accepted.length);
+        refreshSemiAutoMetricsBadge();
+        loadPairsIntoManualEditor(accepted);
+        semiModal.style.display = 'none';
+        clearSemiAutoPreviewMarkers();
+        const manualModal = document.getElementById('manualRegModal');
+        if (manualModal) manualModal.style.display = 'block';
+    });
+
+    runBtn.addEventListener('click', async () => {
+        const accepted = getSemiAutoAcceptedPairs();
+        if (accepted.length < 3) {
+            alert('Keep at least 3 point pairs to run Semi-Auto.');
+            return;
+        }
+        semiAutoSessionMetrics.acceptedPairs = accepted.length;
+        semiAutoSessionMetrics.editedPairs += Math.max(0, semiAutoState.pairs.length - accepted.length);
+
+        const original = runBtn.textContent;
+        runBtn.disabled = true;
+        runBtn.textContent = 'Running...';
+        try {
+            const runResult = await runSemiAutoPipeline(accepted);
+            if (runResult && runResult.passed) {
+                semiModal.style.display = 'none';
+                clearSemiAutoPreviewMarkers();
+            }
+        } catch (err) {
+            showValidationMessage(`Semi-auto failed: ${err.message}`, 'error');
+        } finally {
+            runBtn.disabled = false;
+            runBtn.textContent = original;
+        }
+    });
+}
+
 // Setup overlay viewer controls (shown after successful registration)
 function setupOverlayControls() {
     const backBtn = document.getElementById('backToSplitViewBtn');
@@ -1239,7 +1915,10 @@ function setupOverlayControls() {
                         source_path: selectedSource.file_path,
                         target_path: selectedTarget.file_path,
                         rotation: manualState.transform.rotation,
-                        translation: manualState.transform.translation
+                        translation: manualState.transform.translation,
+                        flow: 'manual_refine',
+                        profile: semiAutoState.profile,
+                        device_profile: semiAutoState.deviceProfile
                     };
                     console.log('Sending ICP payload:', payload);
 
@@ -1254,6 +1933,8 @@ function setupOverlayControls() {
 
                     const result = await resp.json();
                     if (!resp.ok) throw new Error(result.error || 'Refinement failed');
+                    const gatePassed = result.quality_gate ? !!result.quality_gate.passed : ((result.rmse || 999) <= 3.0);
+                    const lowConfidence = !!result.low_confidence || !gatePassed;
 
                     // Calculate RMSE improvement
                     const rmse_before = manualState.transform.rmse || 0;
@@ -1272,9 +1953,22 @@ function setupOverlayControls() {
                         translation: result.translation,
                         rmse: result.rmse
                     };
+                    setRegistrationQuality(result, 'refine_icp');
 
                     console.log('Refinement successful:', result);
-                    showValidationMessage(`Refined! RMSE: ${rmse_before.toFixed(3)} → ${rmse_after.toFixed(3)} (${improvement}% better)`, 'success');
+                    if (lowConfidence) {
+                        showValidationMessage(
+                            `Refine gate failed. RMSE=${rmse_after.toFixed(3)}, overlap=${((result.overlap || 0) * 100).toFixed(1)}%. Add more point pairs.`,
+                            'warning'
+                        );
+                        reportSemiAutoSession(false);
+                        updateSemiAutoAdaptiveHint(getAdaptiveGuidance(result));
+                        refreshSemiAutoMetricsBadge();
+                        return;
+                    }
+                    updateSemiAutoAdaptiveHint('');
+                    reportSemiAutoSession(true);
+                    showValidationMessage(`Refined! RMSE: ${rmse_before.toFixed(3)} -> ${rmse_after.toFixed(3)} (${improvement}% better)`, 'success');
 
                     // Update view
                     await switchToRegistrationOverlayView();
@@ -1348,6 +2042,10 @@ function setupOverlayControls() {
 
     if (finishBtn) {
         finishBtn.addEventListener('click', () => {
+            if (!registrationQuality.passed) {
+                showValidationMessage('Finish blocked: alignment did not pass quality gate yet.', 'warning');
+                return;
+            }
             showValidationMessage('Registration results saved successfully!', 'success');
             // Could navigate to next step or show more options here
         });
@@ -1358,5 +2056,9 @@ function setupOverlayControls() {
 window.addEventListener('DOMContentLoaded', () => {
     initRegistration();
     setupManualRegistrationUI();
+    setupSemiAutoUI();
     setupOverlayControls();
+    updateFinishButtonGate(false, 'Run Semi-Auto/Refine and pass quality gate.');
 });
+
+

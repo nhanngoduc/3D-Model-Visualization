@@ -76,6 +76,27 @@
     z-index: 2500;
     backdrop-filter: blur(8px);
 }
+
+/* Semi-auto panel mode: docked at right, non-blocking over viewer */
+#semiAutoModal.semi-auto-panel {
+    top: 16px;
+    right: 16px;
+    left: auto;
+    transform: none;
+    width: min(500px, 42vw);
+    max-height: calc(100% - 32px);
+    overflow: auto;
+}
+
+#semiAutoModal.semi-auto-panel.minimized {
+    width: 240px;
+    max-height: 62px;
+    overflow: hidden;
+}
+
+#semiAutoModal.semi-auto-panel.minimized #semiAutoBody {
+    display: none;
+}
 .model-selector {
     margin-bottom: 1.5rem;
 }
